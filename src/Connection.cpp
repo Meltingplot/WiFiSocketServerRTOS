@@ -7,6 +7,7 @@
 #include <cstring> 			// memcpy
 #include <algorithm>			// for std::min
 
+#include "esp_system.h"
 #include "lwip/tcp.h"
 
 #include "Connection.h"
@@ -117,14 +118,14 @@ size_t Connection::Write(const uint8_t *data, size_t length, bool doPush, bool c
 
 	if (rc != ERR_OK)
 	{
-		if (rc == ERR_RST || rc == ERR_CLSD)
+		if (rc == ERR_RST || rc == ERR_CLSD || rc == ERR_ABRT)
 		{
 			SetState(ConnState::otherEndClosed);
 		}
 		else
 		{
 			// We failed to write the data. See above for possible mitigations. For now we just terminate the connection.
-			debugPrintfAlways("Write fail len=%u err=%d\n", total, (int)rc);
+			debugPrintfAlways("Write fail len=%u err=%d heap=%u\n", total, (int)rc, (unsigned)esp_get_free_heap_size());
 			Terminate(false);		// chrishamm: Not sure if this helps with LwIP v1.4.3 but it is mandatory for proper error handling with LwIP 2.0.3
 			return 0;
 		}
@@ -136,7 +137,7 @@ size_t Connection::Write(const uint8_t *data, size_t length, bool doPush, bool c
 		Close();
 	}
 
-	return length;
+	return total;
 }
 
 size_t Connection::CanWrite() const
@@ -165,10 +166,11 @@ void Connection::Poll()
 			rc = netconn_recv_tcp_pbuf_flags(conn, &data, NETCONN_NOAUTORCVD);
 		}
 
-		if (rc != ERR_WOULDBLOCK)
+		if (rc != ERR_WOULDBLOCK && rc != ERR_TIMEOUT)
 		{
-			if (rc == ERR_RST || rc == ERR_CLSD || rc == ERR_CONN)
+			if (rc == ERR_RST || rc == ERR_CLSD || rc == ERR_CONN || rc == ERR_ABRT)
 			{
+				// Connection was closed, reset, or aborted (e.g. by lwIP under memory pressure).
 				// Pend setting the state to other end closed if there is data to be read.
 				// Otherwise, set it immediately. This is to avoid a case when a socket in RRF
 				// gets stuck in the peer disconnecting state, when it recieves the change of
@@ -186,6 +188,8 @@ void Connection::Poll()
 			}
 			else
 			{
+				debugPrintfAlways("Poll: conn %u unexpected recv err=%d heap=%u\n",
+					number, (int)rc, (unsigned)esp_get_free_heap_size());
 				Terminate(false);
 			}
 		}
@@ -305,6 +309,11 @@ bool Connection::Connect(uint8_t protocol, uint32_t remoteIp, uint16_t remotePor
 
 void Connection::Terminate(bool external)
 {
+	if (!external)
+	{
+		debugPrintfAlways("Terminate: conn %u state=%d heap=%u\n",
+			number, (int)state, (unsigned)esp_get_free_heap_size());
+	}
 	if (conn) {
 		// No need to pass to ConnectionTask and do a graceful close on the connection.
 		// Delete it here.
