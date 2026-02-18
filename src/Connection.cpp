@@ -110,6 +110,9 @@ size_t Connection::Write(const uint8_t *data, size_t length, bool doPush, bool c
 		if (rc != ERR_OK && rc != ERR_WOULDBLOCK) {
 			break;
 		}
+		if (rc == ERR_WOULDBLOCK && written == 0) {
+			break;		// send buffer full and no progress after timeout, avoid spinning
+		}
 	}
 
 	if (rc != ERR_OK)

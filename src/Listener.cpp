@@ -127,13 +127,14 @@ bool Listener::Start(uint16_t port, uint32_t ip, int protocol, int maxConns)
 
 void Listener::Stop()
 {
-	netconn_close(conn);
-	netconn_delete(conn);
+	struct netconn *savedConn = conn;
+	netconn_close(savedConn);
+	netconn_delete(savedConn);
 
 	for (int i = 0; i < MaxConnections; i++)
 	{
 		Listener *listener = listeners[i];
-		if (listener && listener->conn == conn)
+		if (listener && listener->conn == savedConn)
 		{
 			delete listener;
 			listeners[i] = nullptr;
@@ -234,6 +235,7 @@ void Listener::Notify()
 							if (listener->protocol == protocolFtpData)
 							{
 								debugPrintf("accept conn, stop listen on port %u\n", listener->port);
+								c->listener = nullptr;	// clear before Stop() deletes the listener to prevent use-after-free
 								listener->Stop();	// don't listen for further connections
 							}
 						}
@@ -244,12 +246,26 @@ void Listener::Notify()
 					}
 					else
 					{
-						debugPrintfAlways("pend connection on port %u no free conn\n", listener->port);
+						// No free connection slots. Drain from backlog to free lwIP resources.
+						struct netconn *newConn;
+						if (netconn_accept(listener->conn, &newConn) == ERR_OK)
+						{
+							netconn_close(newConn);
+							netconn_delete(newConn);
+						}
+						debugPrintfAlways("rejected connection on port %u no free conn\n", listener->port);
 					}
 				}
 				else
 				{
-					debugPrintfAlways("pend connection on port %u already %u conns\n", listener->port, numConns);
+					// Too many connections on this port. Drain from backlog to free lwIP resources.
+					struct netconn *newConn;
+					if (netconn_accept(listener->conn, &newConn) == ERR_OK)
+					{
+						netconn_close(newConn);
+						netconn_delete(newConn);
+					}
+					debugPrintfAlways("rejected connection on port %u already %u conns\n", listener->port, numConns);
 				}
 			}
 		}
