@@ -27,6 +27,25 @@
 #include "esp8266/spi.h"
 #include "esp8266/gpio.h"
 
+// Maximum iterations to wait for SPI hardware to complete a transaction.
+// At 80MHz CPU clock, a tight loop runs ~20-40M iterations/sec, so 500000
+// iterations is approximately 12-25ms — far longer than any SPI transaction
+// should take (a 512-bit transfer at 26.7MHz takes ~19us).
+static const uint32_t SPI_WAIT_TIMEOUT = 500000;
+
+// Wait for SPI hardware to finish. Returns true if SPI is ready, false on timeout.
+static bool IRAM_ATTR waitForSpiReady()
+{
+	for (uint32_t i = 0; i < SPI_WAIT_TIMEOUT; ++i)
+	{
+		if (!(REG(SPI_CMD(MSPI)) & SPI_USR))
+		{
+			return true;
+		}
+	}
+	return false;
+}
+
 HSPIClass::HSPIClass() {
 }
 
@@ -97,7 +116,7 @@ void HSPIClass::end() {
 
 // Begin a transaction without changing settings
 void IRAM_ATTR HSPIClass::beginTransaction() {
-	while(REG(SPI_CMD(MSPI)) & SPI_USR) {}
+	waitForSpiReady();
 }
 
 void IRAM_ATTR HSPIClass::endTransaction() {
@@ -134,13 +153,13 @@ void HSPIClass::setDataBits(uint16_t bits)
 
 uint32_t IRAM_ATTR HSPIClass::transfer32(uint32_t data)
 {
-	while(REG(SPI_CMD(MSPI)) & SPI_USR) {}
+	waitForSpiReady();
 	// Set to 32Bits transfer
 	setDataBits(32);
 	// LSBFIRST Byte first
 	REG(SPI_W0(MSPI)) = data;
 	REG(SPI_CMD(MSPI)) |= SPI_USR;
-	while(REG(SPI_CMD(MSPI)) & SPI_USR) {}
+	waitForSpiReady();
 	return REG(SPI_W0(MSPI));
 }
 
@@ -164,7 +183,7 @@ void IRAM_ATTR HSPIClass::transferDwords(const uint32_t * out, uint32_t * in, ui
 }
 
 void IRAM_ATTR HSPIClass::transferDwords_(const uint32_t * out, uint32_t * in, uint8_t size) {
-	while(REG(SPI_CMD(MSPI)) & SPI_USR) {}
+	waitForSpiReady();
 
 	// Set in/out Bits to transfer
 	setDataBits(size * 32);
@@ -186,7 +205,7 @@ void IRAM_ATTR HSPIClass::transferDwords_(const uint32_t * out, uint32_t * in, u
 	}
 
 	REG(SPI_CMD(MSPI)) |= SPI_USR;
-	while(REG(SPI_CMD(MSPI)) & SPI_USR) {}
+	waitForSpiReady();
 
 	if (in != nullptr) {
 		volatile uint32_t * fifoPtrRd = &REG(SPI_W0(MSPI));

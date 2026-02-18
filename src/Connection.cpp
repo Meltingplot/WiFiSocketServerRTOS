@@ -452,7 +452,7 @@ void Connection::Report()
 	// pre-empted by the ConnectionTask executing the same code, the allocated
 	// Connection will have been already spent.
 	if (!allocateMutex) { return nullptr; }
-	xSemaphoreTake(allocateMutex, portMAX_DELAY);
+	if (xSemaphoreTake(allocateMutex, pdMS_TO_TICKS(200)) != pdTRUE) { return nullptr; }
 	for (size_t i = 0; i < MaxConnections; ++i)
 	{
 		if (connectionList[i]->state == ConnState::free)

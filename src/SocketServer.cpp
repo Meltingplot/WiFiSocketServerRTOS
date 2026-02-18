@@ -1822,9 +1822,22 @@ void ProcessRequest()
 				break;
 			}
 
-			while (currentState != WiFiState::idle)
+			// Wait for WiFi to reach idle state with a bounded timeout.
+			// esp_wifi_stop() is asynchronous; the WiFi event handler sets currentState
+			// to idle when it receives WIFI_EVENT_STA_STOP or WIFI_EVENT_AP_STOP.
 			{
-				delay(100);
+				const uint32_t maxWaitMs = 5000;
+				const uint32_t stepMs = 100;
+				uint32_t waited = 0;
+				while (currentState != WiFiState::idle && waited < maxWaitMs)
+				{
+					delay(stepMs);
+					waited += stepMs;
+				}
+				if (currentState != WiFiState::idle)
+				{
+					debugPrintAlways("networkStop: timed out waiting for idle state\n");
+				}
 			}
 
 			usingDhcpc = false;
