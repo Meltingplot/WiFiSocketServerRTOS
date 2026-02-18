@@ -26,10 +26,8 @@ jobs:
       - name: Install ESP8266 RTOS SDK toolchain
         run: |
           cd ${{ github.workspace }}/ESP8266_RTOS_SDK
+          pip3 install --break-system-packages setuptools
           ./install.sh
-          # Python 3.12+ venvs no longer include setuptools by default,
-          # but export.sh needs pkg_resources for its dependency check.
-          find "$HOME/.espressif/python_env" -path "*/bin/pip" -exec {} install setuptools \;
 
       - name: Build
         run: |
