@@ -354,8 +354,16 @@ static void HandleWiFiEvent(void* arg, esp_event_base_t event_base,
 		if (scanState == WIFI_SCANNING) {
 			esp_wifi_scan_get_ap_num(&wifiScanNum);
 			wifiScanAPs = (wifi_ap_record_t*) calloc(wifiScanNum, sizeof(wifi_ap_record_t));
-			esp_wifi_scan_get_ap_records(&wifiScanNum, wifiScanAPs);
-			scanState = WIFI_SCAN_DONE;
+			if (wifiScanAPs)
+			{
+				esp_wifi_scan_get_ap_records(&wifiScanNum, wifiScanAPs);
+				scanState = WIFI_SCAN_DONE;
+			}
+			else
+			{
+				wifiScanNum = 0;
+				scanState = WIFI_SCAN_IDLE;
+			}
 		}
 		return; // do not send an event
 	}
@@ -486,7 +494,7 @@ void WiFiConnectionTask(void* data)
 
 				if (error != nullptr)
 				{
-					strcpy(lastConnectError, error);
+					SafeStrncpy(lastConnectError, error, ARRAY_SIZE(lastConnectError));
 					SafeStrncat(lastConnectError, " while trying to connect to ", ARRAY_SIZE(lastConnectError));
 					WirelessConfigurationData wp;
 					wirelessConfigMgr->GetSsid(currentSsid, wp);
@@ -615,6 +623,12 @@ int ScanForNetworks(const char *reqSsid, uint8_t mac[6], int8_t &channel, Wirele
 	esp_wifi_scan_get_ap_num(&num_ssids);
 
 	wifi_ap_record_t *ap_records = (wifi_ap_record_t*) calloc(num_ssids, sizeof(wifi_ap_record_t));
+	if (!ap_records)
+	{
+		esp_wifi_stop();
+		lastError = "out of memory during scan";
+		return -1;
+	}
 
 	esp_wifi_scan_get_ap_records(&num_ssids, ap_records);
 	esp_wifi_stop();
@@ -1808,9 +1822,23 @@ void ProcessRequest()
 				break;
 			}
 
-			while (currentState != WiFiState::idle)
+			// Wait for WiFi to reach idle state with a bounded timeout.
+			// esp_wifi_stop() is asynchronous; the WiFi event handler sets currentState
+			// to idle when it receives WIFI_EVENT_STA_STOP or WIFI_EVENT_AP_STOP.
 			{
-				delay(100);
+				const uint32_t maxWaitMs = 5000;
+				const uint32_t stepMs = 100;
+				uint32_t waited = 0;
+				while (currentState != WiFiState::idle && waited < maxWaitMs)
+				{
+					esp_task_wdt_reset();
+					delay(stepMs);
+					waited += stepMs;
+				}
+				if (currentState != WiFiState::idle)
+				{
+					debugPrintAlways("networkStop: timed out waiting for idle state\n");
+				}
 			}
 
 			usingDhcpc = false;
@@ -1954,6 +1982,16 @@ void setup()
 	Connection::Init();
 	Listener::Init();
 
+	// Subscribe the main task to the task watchdog so the module restarts
+	// if the main loop gets stuck (e.g. SPI hardware hang).
+	// The WDT timeout is configured via CONFIG_ESP_TASK_WDT_TIMEOUT_S.
+#ifdef ESP8266
+	esp_task_wdt_init();
+#else
+	esp_task_wdt_init(CONFIG_ESP_TASK_WDT_TIMEOUT_S, true);
+	esp_task_wdt_add(NULL);
+#endif
+
 	lastError = nullptr;
 	debugPrint("Init completed\n");
 	gpio_set_level(EspReqTransferPin, 1);					// tell the SAM we are ready to receive a command
@@ -1961,6 +1999,8 @@ void setup()
 
 void loop()
 {
+	esp_task_wdt_reset();
+
 	// See whether there is a request from the SAM.
 	// Duet WiFi 1.04 and earlier have hardware to ensure that TransferReady goes low when a transaction starts.
 	// Duet 3 Mini doesn't, so we need to see TransferReady go low and then high again. In case that happens so fast that we dn't get the interrupt, we have a timeout.

@@ -140,7 +140,7 @@ size_t Connection::CanWrite() const
 {
 	// Return the amount of free space in the write buffer
 	// Note: we cannot necessarily write this amount, because it depends on memory allocations being successful.
-	return ((state == ConnState::connected && !pendOtherEndClosed) && conn->pcb.tcp) ?
+	return ((state == ConnState::connected && !pendOtherEndClosed) && conn && conn->pcb.tcp) ?
 		std::min((size_t)tcp_sndbuf(conn->pcb.tcp), MaxDataLength) : 0;
 }
 
@@ -195,10 +195,15 @@ void Connection::Poll()
 	else if (state == ConnState::closePending)
 	{
 		// We're about to close this connection and we're still waiting for the remaining data to be acknowledged
-		if (conn->pcb.tcp && !conn->pcb.tcp->unacked)
+		if (conn && conn->pcb.tcp && !conn->pcb.tcp->unacked)
 		{
 			// All data has been received, close this connection next time
 			SetState(ConnState::closeReady);
+		}
+		else if (!conn || !conn->pcb.tcp)
+		{
+			// Connection was lost, terminate immediately
+			Terminate(false);
 		}
 		else if (millis() - closeTimer >= MaxAckTime)
 		{
@@ -218,7 +223,7 @@ void Connection::Close()
 	switch(state)
 	{
 	case ConnState::connected:						// both ends are still connected
-		if (conn->pcb.tcp && conn->pcb.tcp->unacked)
+		if (conn && conn->pcb.tcp && conn->pcb.tcp->unacked)
 		{
 			closeTimer = millis();
 			netconn_shutdown(conn, true, false);	// shut down recieve
@@ -237,7 +242,10 @@ void Connection::Close()
 		}
 		FreePbuf();
 		SetState(ConnState::free);
-		listener->Notify();
+		if (listener)
+		{
+			listener->Notify();
+		}
 		break;
 
 	case ConnState::closePending:					// we already asked to close
@@ -289,7 +297,7 @@ bool Connection::Connect(uint8_t protocol, uint32_t remoteIp, uint16_t remotePor
 		debugPrintAlways("can't allocate connection\n");
 	}
 
-	return true;
+	return false;
 }
 
 void Connection::Terminate(bool external)
@@ -303,7 +311,10 @@ void Connection::Terminate(bool external)
 	}
 	FreePbuf();
 	SetState((external) ? ConnState::free : ConnState::aborted);
-	listener->Notify();
+	if (listener)
+	{
+		listener->Notify();
+	}
 }
 
 void Connection::Accept(Listener *listener, struct netconn* conn, uint8_t protocol)
@@ -440,7 +451,8 @@ void Connection::Report()
 	// specifically after the state == free check, at which point is
 	// pre-empted by the ConnectionTask executing the same code, the allocated
 	// Connection will have been already spent.
-	xSemaphoreTake(allocateMutex, portMAX_DELAY);
+	if (!allocateMutex) { return nullptr; }
+	if (xSemaphoreTake(allocateMutex, pdMS_TO_TICKS(200)) != pdTRUE) { return nullptr; }
 	for (size_t i = 0; i < MaxConnections; ++i)
 	{
 		if (connectionList[i]->state == ConnState::free)
