@@ -1,8 +1,0 @@
-menu "WiFiSocketServer"
-
-    config TCPIP_ADAPTER_HOSTNAME_MAX_LENGTH
-        int "Max hostname length for tcpip adapter"
-        range 1 128
-        default 64
-
-endmenu
