@@ -21,6 +21,10 @@ idf_component_register(SRCS "${srcs}"
                        REQUIRES spi_flash mdns
                        PRIV_REQUIRES indicator nvs_flash wpa_supplicant spiffs)
 
+if(DEBUG_BUILD)
+    target_compile_definitions(${COMPONENT_LIB} PUBLIC "DEBUG")
+endif()
+
 idf_build_get_property(python PYTHON)
 idf_build_get_property(build_dir BUILD_DIR)
 

@@ -164,6 +164,7 @@ void Connection::Poll()
 
 		if (rc != ERR_WOULDBLOCK)
 		{
+			debugPrintf("conn %u: poll recv error rc=%d state=%d\n", number, (int)rc, (int)state);
 			if (rc == ERR_RST || rc == ERR_CLSD || rc == ERR_CONN)
 			{
 				// Pend setting the state to other end closed if there is data to be read.
@@ -203,11 +204,13 @@ void Connection::Poll()
 		else if (!conn || !conn->pcb.tcp)
 		{
 			// Connection was lost, terminate immediately
+			debugPrintf("conn %u: lost during closePending\n", number);
 			Terminate(false);
 		}
 		else if (millis() - closeTimer >= MaxAckTime)
 		{
 			// The acknowledgement timer has expired, abort this connection
+			debugPrintf("conn %u: ack timeout during closePending\n", number);
 			Terminate(false);
 		}
 	}
@@ -220,6 +223,7 @@ void Connection::Poll()
 // which will free it up.
 void Connection::Close()
 {
+	debugPrintf("conn %u: close requested, state=%d\n", number, (int)state);
 	switch(state)
 	{
 	case ConnState::connected:						// both ends are still connected
@@ -264,6 +268,10 @@ void Connection::Deallocate()
 
 bool Connection::Connect(uint8_t protocol, uint32_t remoteIp, uint16_t remotePort)
 {
+	debugPrintf("conn %u: connecting to %u.%u.%u.%u:%u proto=%u\n",
+		number, remoteIp & 0xFF, (remoteIp >> 8) & 0xFF,
+		(remoteIp >> 16) & 0xFF, (remoteIp >> 24) & 0xFF, remotePort, protocol);
+
 	struct netconn * conn = netconn_new_with_callback(NETCONN_TCP, ConnectCallback);
 
 	if (conn)
@@ -289,6 +297,7 @@ bool Connection::Connect(uint8_t protocol, uint32_t remoteIp, uint16_t remotePor
 		}
 		else
 		{
+			debugPrintf("conn %u: connect failed rc=%d\n", number, (int)rc);
 			Terminate(true);
 		}
 	}
@@ -302,6 +311,7 @@ bool Connection::Connect(uint8_t protocol, uint32_t remoteIp, uint16_t remotePor
 
 void Connection::Terminate(bool external)
 {
+	debugPrintf("conn %u: terminate external=%d state=%d\n", number, (int)external, (int)state);
 	if (conn) {
 		// No need to pass to ConnectionTask and do a graceful close on the connection.
 		// Delete it here.
@@ -331,6 +341,10 @@ void Connection::Connected(Listener *listener, struct netconn* conn)
 	remotePort = conn->pcb.tcp->remote_port;
 	remoteIp = conn->pcb.tcp->remote_ip.u_addr.ip4.addr;
 	readIndex = alreadyRead = closeTimer = pendOtherEndClosed = 0;
+
+	debugPrintf("conn %u: established %u.%u.%u.%u:%u -> :%u\n",
+		number, remoteIp & 0xFF, (remoteIp >> 8) & 0xFF,
+		(remoteIp >> 16) & 0xFF, (remoteIp >> 24) & 0xFF, remotePort, localPort);
 
 	// This function is used in lower priority tasks than the main task.
 	// Mark the connection ready last, so the main task does not use it when it's not ready.
@@ -496,6 +510,7 @@ void Connection::Report()
 				break;
 
 			case NETCONN_EVT_ERROR:
+				debugPrintf("conn %u: connect callback error\n", connection->number);
 				connection->SetState(ConnState::otherEndClosed);
 				break;
 			default:

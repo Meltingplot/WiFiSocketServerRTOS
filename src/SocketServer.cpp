@@ -246,7 +246,7 @@ static void HandleWiFiEvent(void* arg, esp_event_base_t event_base,
 		return;
 	} else if (event_base == WIFI_EVENT && event_id == WIFI_EVENT_STA_DISCONNECTED) {
 		wifi_event_sta_disconnected_t* disconnected = (wifi_event_sta_disconnected_t*) event_data;
-		debugPrintf("disconnect reason: %d\n", disconnected->reason);
+		debugPrintf("disconnect reason: %d reconnects: %u\n", disconnected->reason, numWifiReconnects);
 		switch (disconnected->reason) {
 			// include authentication failures in general
 			case WIFI_REASON_AUTH_EXPIRE:
@@ -435,6 +435,8 @@ void WiFiConnectionTask(void* data)
 		uint32_t event = 0;
 		xTaskNotifyWait(0, UINT_MAX, &event, portMAX_DELAY);
 
+		debugPrintf("WiFi task: state=%u event=%u\n", (uint32_t)currentState, event);
+
 		WiFiState prevCurrentState = currentState;
 
 		bool connectErrorChanged = false;
@@ -520,7 +522,7 @@ void WiFiConnectionTask(void* data)
 				xTimerReset(connExpTmr, portMAX_DELAY);		// start the auto reconnect timer
 				esp_wifi_connect();
 				lastError = "Lost connection, auto reconnecting";
-				debugPrint("Lost connection to AP\n");
+				debugPrintf("Lost connection to AP, event=%u, reconnects=%u\n", event, numWifiReconnects);
 				break;
 			}
 			break;
@@ -531,12 +533,15 @@ void WiFiConnectionTask(void* data)
 			} else if (event == STATION_GOT_IP) {
 				xTimerStop(connExpTmr, portMAX_DELAY);
 				lastError = "Auto reconnect succeeded";
+				debugPrint("Auto reconnect succeeded\n");
 				currentState = WiFiState::connected;
 			} else if (event != STATION_CONNECTING) {
 				if (event == STATION_CONNECT_TIMEOUT) {
 					lastError = "Timed out trying to auto-reconnect";
+					debugPrint("Auto-reconnect timed out\n");
 				} else {
 					lastError = "Auto reconnect failed, trying manual reconnect";
+					debugPrintf("Auto reconnect failed event=%u, retrying\n", event);
 				}
 				xTimerReset(connExpTmr, portMAX_DELAY);		// start the reconnect timer
 				retry = true;
@@ -614,6 +619,7 @@ int ScanForNetworks(const char *reqSsid, uint8_t mac[6], int8_t &channel, Wirele
 	esp_err_t res = esp_wifi_scan_start(&cfg, true);
 
 	if (res != ESP_OK) {
+		debugPrintf("ScanForNetworks: scan_start failed res=%d\n", (int)res);
 		esp_wifi_stop();
 		lastError = "network scan failed";
 		return -1;
@@ -621,6 +627,7 @@ int ScanForNetworks(const char *reqSsid, uint8_t mac[6], int8_t &channel, Wirele
 
 	uint16_t num_ssids = 0;
 	esp_wifi_scan_get_ap_num(&num_ssids);
+	debugPrintf("ScanForNetworks: found %u APs\n", num_ssids);
 
 	wifi_ap_record_t *ap_records = (wifi_ap_record_t*) calloc(num_ssids, sizeof(wifi_ap_record_t));
 	if (!ap_records)
@@ -690,10 +697,12 @@ pre(currentState == WiFiState::idle)
 	memset(&wifi_config, 0, sizeof(wifi_config));
 
 	int ssidIdx = ScanForNetworks(ssid, wifi_config.sta.bssid, channel, wp);
+	debugPrintf("StartClient: scan result ssidIdx=%d channel=%d\n", ssidIdx, channel);
 
 	if (ssidIdx <= 0)
 	{
 		lastError = "no known networks found";
+		debugPrint("StartClient: no known networks found\n");
 		return;
 	}
 
@@ -1757,11 +1766,15 @@ void ProcessRequest()
 					if (!conn->Connect(lcData.protocol, lcData.remoteIp, lcData.port))
 					{
 						lastError = "Connection creation failed";
+						debugPrintf("connCreate: failed to %u.%u.%u.%u:%u\n",
+							lcData.remoteIp & 0xFF, (lcData.remoteIp >> 8) & 0xFF,
+							(lcData.remoteIp >> 16) & 0xFF, (lcData.remoteIp >> 24) & 0xFF, lcData.port);
 					}
 				}
 				else
 				{
 					// No available connection
+					debugPrint("connCreate: no free connection slots\n");
 					SendResponse(ResponseBusy);
 				}
 			}
@@ -1950,7 +1963,11 @@ void setup()
 	xTaskCreate(StatePrintTask, "statePrint", STATE_PRINT_STACK, NULL, tskIDLE_PRIORITY, NULL);
 #endif
 
+#ifdef DEBUG
+	esp_log_level_set("wifi", ESP_LOG_WARN);
+#else
 	esp_log_level_set("wifi", ESP_LOG_NONE);
+#endif
 
 	wirelessConfigMgr->Init();
 
