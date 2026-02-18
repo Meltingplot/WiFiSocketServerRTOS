@@ -27,6 +27,11 @@ jobs:
         run: |
           cd ${{ github.workspace }}/ESP8266_RTOS_SDK
           ./install.sh
+          # Downgrade setuptools in the SDK venv — setuptools 82+ removed pkg_resources
+          # which the SDK's check_python_dependencies.py requires
+          for pip_bin in $HOME/.espressif/python_env/*/bin/pip; do
+            $pip_bin install "setuptools<75"
+          done
 
       - name: Build
         run: |
