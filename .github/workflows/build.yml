@@ -33,6 +33,7 @@ jobs:
         run: |
           cd ${{ github.workspace }}/ESP8266_RTOS_SDK
           ./install.sh
+          $HOME/.espressif/python_env/*/bin/pip install setuptools
 
       - name: Build
         run: |
