@@ -354,8 +354,16 @@ static void HandleWiFiEvent(void* arg, esp_event_base_t event_base,
 		if (scanState == WIFI_SCANNING) {
 			esp_wifi_scan_get_ap_num(&wifiScanNum);
 			wifiScanAPs = (wifi_ap_record_t*) calloc(wifiScanNum, sizeof(wifi_ap_record_t));
-			esp_wifi_scan_get_ap_records(&wifiScanNum, wifiScanAPs);
-			scanState = WIFI_SCAN_DONE;
+			if (wifiScanAPs)
+			{
+				esp_wifi_scan_get_ap_records(&wifiScanNum, wifiScanAPs);
+				scanState = WIFI_SCAN_DONE;
+			}
+			else
+			{
+				wifiScanNum = 0;
+				scanState = WIFI_SCAN_IDLE;
+			}
 		}
 		return; // do not send an event
 	}
@@ -486,7 +494,7 @@ void WiFiConnectionTask(void* data)
 
 				if (error != nullptr)
 				{
-					strcpy(lastConnectError, error);
+					SafeStrncpy(lastConnectError, error, ARRAY_SIZE(lastConnectError));
 					SafeStrncat(lastConnectError, " while trying to connect to ", ARRAY_SIZE(lastConnectError));
 					WirelessConfigurationData wp;
 					wirelessConfigMgr->GetSsid(currentSsid, wp);
@@ -615,6 +623,12 @@ int ScanForNetworks(const char *reqSsid, uint8_t mac[6], int8_t &channel, Wirele
 	esp_wifi_scan_get_ap_num(&num_ssids);
 
 	wifi_ap_record_t *ap_records = (wifi_ap_record_t*) calloc(num_ssids, sizeof(wifi_ap_record_t));
+	if (!ap_records)
+	{
+		esp_wifi_stop();
+		lastError = "out of memory during scan";
+		return -1;
+	}
 
 	esp_wifi_scan_get_ap_records(&num_ssids, ap_records);
 	esp_wifi_stop();

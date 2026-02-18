@@ -192,7 +192,9 @@ void DNSServer::replyWithIP()
   // _dnsHeader->RA = 1;
 
   struct netbuf* data = netbuf_new();
+  if (!data) return;
   uint8_t* allocd = (uint8_t*)netbuf_alloc(data, _currentPacketSize + 16);
+  if (!allocd) { netbuf_delete(data); return; }
   netbuf_take(data, _buffer, _currentPacketSize);
 
   uint8_t *more = &allocd[_currentPacketSize];
@@ -230,7 +232,8 @@ void DNSServer::replyWithCustomCode()
   _dnsHeader->QDCount = 0;
 
   struct netbuf* data = netbuf_new();
-  netbuf_alloc(data, sizeof(DNSHeader));
+  if (!data) return;
+  if (!netbuf_alloc(data, sizeof(DNSHeader))) { netbuf_delete(data); return; }
   netbuf_take(data, _buffer, sizeof(DNSHeader));
   netconn_sendto(_udp, data, &_remoteIp, _remotePort);
   netbuf_delete(data);
