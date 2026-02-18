@@ -27,6 +27,9 @@ jobs:
         run: |
           cd ${{ github.workspace }}/ESP8266_RTOS_SDK
           ./install.sh
+          # Python 3.12+ venvs no longer include setuptools by default,
+          # but export.sh needs pkg_resources for its dependency check.
+          find "$HOME/.espressif/python_env" -path "*/bin/pip" -exec {} install setuptools \;
 
       - name: Build
         run: |
