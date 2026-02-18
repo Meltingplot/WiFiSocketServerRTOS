@@ -21,7 +21,10 @@ jobs:
 
       - name: Clone ESP8266 RTOS SDK
         run: |
-          git clone --branch dwss_support --recursive https://github.com/Duet3D/ESP8266_RTOS_SDK.git ${{ github.workspace }}/ESP8266_RTOS_SDK
+          git clone --branch dwss_support https://github.com/Duet3D/ESP8266_RTOS_SDK.git ${{ github.workspace }}/ESP8266_RTOS_SDK
+          cd ${{ github.workspace }}/ESP8266_RTOS_SDK
+          git submodule update --init --recursive -- components/json components/lwip components/mbedtls components/mqtt
+          git submodule update --init -- components/coap/libcoap
 
       - name: Install ESP8266 RTOS SDK toolchain
         run: |
