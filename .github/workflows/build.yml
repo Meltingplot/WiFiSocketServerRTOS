@@ -1,0 +1,43 @@
+name: Build ESP8266
+
+on:
+  push:
+    branches: [ master, main ]
+  pull_request:
+    branches: [ master, main ]
+
+jobs:
+  build-esp8266:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Install prerequisites
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y git wget flex bison gperf python3 python3-pip python3-venv python3-setuptools cmake ninja-build ccache libffi-dev libssl-dev dfu-util libusb-1.0-0 python3-serial
+
+      - name: Clone ESP8266 RTOS SDK
+        run: |
+          git clone --branch dwss_support --recursive https://github.com/Duet3D/ESP8266_RTOS_SDK.git ${{ github.workspace }}/ESP8266_RTOS_SDK
+
+      - name: Install ESP8266 RTOS SDK toolchain
+        run: |
+          cd ${{ github.workspace }}/ESP8266_RTOS_SDK
+          ./install.sh
+
+      - name: Build
+        run: |
+          source ${{ github.workspace }}/ESP8266_RTOS_SDK/export.sh
+          cd ${{ github.workspace }}
+          make defconfig
+          make -j$(nproc)
+
+      - name: Upload build artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: DuetWiFiServer
+          path: build/DuetWiFiServer.bin
+          if-no-files-found: warn
