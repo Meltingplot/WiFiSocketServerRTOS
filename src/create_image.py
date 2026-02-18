@@ -45,6 +45,8 @@ else:
             except:
                 pass
 
+    bins.sort(key=lambda b: b["offset"])
+
 with open(args.output, 'wb') as imgfile:
     pos = 0
     img = b''
