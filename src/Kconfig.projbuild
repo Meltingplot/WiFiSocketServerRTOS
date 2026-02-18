@@ -5,4 +5,12 @@ menu "WiFiSocketServer"
         range 1 128
         default 64
 
+    config MDNS_TASK_STACK_SIZE
+        int "mDNS task stack size"
+        default 2076
+
+    config HEAP_PRIO_8BIT_RAM
+        bool "Prioritize 8-bit accessible RAM for heap allocation"
+        default y
+
 endmenu
