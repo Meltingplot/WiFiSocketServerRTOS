@@ -14,10 +14,16 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v4
 
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
       - name: Install prerequisites
         run: |
           sudo apt-get update
-          sudo apt-get install -y git wget flex bison gperf python3 python3-pip python3-venv python3-setuptools cmake ninja-build ccache libffi-dev libssl-dev dfu-util libusb-1.0-0 python3-serial
+          sudo apt-get install -y git wget flex bison gperf cmake ninja-build ccache libffi-dev libssl-dev dfu-util libusb-1.0-0
+          pip install setuptools pyserial
 
       - name: Clone ESP8266 RTOS SDK
         run: |
@@ -26,7 +32,6 @@ jobs:
       - name: Install ESP8266 RTOS SDK toolchain
         run: |
           cd ${{ github.workspace }}/ESP8266_RTOS_SDK
-          pip3 install --break-system-packages setuptools
           ./install.sh
 
       - name: Build
