@@ -33,19 +33,6 @@
 // should take (a 512-bit transfer at 26.7MHz takes ~19us).
 static const uint32_t SPI_WAIT_TIMEOUT = 500000;
 
-// Wait for SPI hardware to finish. Returns true if SPI is ready, false on timeout.
-static bool IRAM_ATTR waitForSpiReady()
-{
-	for (uint32_t i = 0; i < SPI_WAIT_TIMEOUT; ++i)
-	{
-		if (!(REG(SPI_CMD(MSPI)) & SPI_USR))
-		{
-			return true;
-		}
-	}
-	return false;
-}
-
 HSPIClass::HSPIClass() {
 }
 
@@ -114,8 +101,24 @@ void HSPIClass::end() {
 	gpio_set_direction(SCK, GPIO_MODE_INPUT);
 }
 
+// Wait for SPI hardware to finish. Returns true if SPI is ready, false on timeout.
+// Sets timedOut flag on failure so callers can detect and abort the transaction.
+bool IRAM_ATTR HSPIClass::waitForSpiReady()
+{
+	for (uint32_t i = 0; i < SPI_WAIT_TIMEOUT; ++i)
+	{
+		if (!(REG(SPI_CMD(MSPI)) & SPI_USR))
+		{
+			return true;
+		}
+	}
+	timedOut = true;
+	return false;
+}
+
 // Begin a transaction without changing settings
 void IRAM_ATTR HSPIClass::beginTransaction() {
+	timedOut = false;
 	waitForSpiReady();
 }
 

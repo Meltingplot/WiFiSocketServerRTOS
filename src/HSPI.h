@@ -40,9 +40,15 @@ public:
   void transferDwords(const uint32_t * out, uint32_t * in, uint32_t size);
   void endTransaction(void);
 
+  // Returns true if an SPI timeout occurred during the last transaction.
+  // Cleared at the start of each beginTransaction() call.
+  bool hadTimeout() const { return timedOut; }
+
 private:
   void setClockDivider(uint32_t clockDiv);
   void transferDwords_(const uint32_t * out, uint32_t * in, uint8_t size);
+  bool waitForSpiReady();
+  volatile bool timedOut = false;
 };
 
 #endif

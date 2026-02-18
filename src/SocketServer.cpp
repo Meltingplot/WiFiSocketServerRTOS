@@ -1058,6 +1058,15 @@ void ProcessRequest()
 	// Exchange headers, except for the last dword which will contain our response
 	hspi.transferDwords(messageHeaderOut.asDwords, messageHeaderIn.asDwords, headerDwords - 1);
 
+	if (hspi.hadTimeout())
+	{
+		// SPI hardware timed out — don't interpret garbage data, just end the transaction
+		debugPrintAlways("SPI timeout during header exchange\n");
+		gpio_set_level(SamSSPin, 1);
+		hspi.endTransaction();
+		return;
+	}
+
 	if (messageHeaderIn.hdr.formatVersion != MyFormatVersion)
 	{
 		SendResponse(ResponseBadRequestFormatVersion);
