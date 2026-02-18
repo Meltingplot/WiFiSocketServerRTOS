@@ -21,7 +21,7 @@ jobs:
 
       - name: Clone ESP8266 RTOS SDK
         run: |
-          git clone --branch master --recursive https://github.com/espressif/ESP8266_RTOS_SDK.git ${{ github.workspace }}/ESP8266_RTOS_SDK
+          git clone --branch dwss_support --recursive https://github.com/Duet3D/ESP8266_RTOS_SDK.git ${{ github.workspace }}/ESP8266_RTOS_SDK
 
       - name: Install ESP8266 RTOS SDK toolchain
         run: |
