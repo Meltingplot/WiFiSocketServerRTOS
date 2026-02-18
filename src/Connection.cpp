@@ -125,7 +125,7 @@ size_t Connection::Write(const uint8_t *data, size_t length, bool doPush, bool c
 		else
 		{
 			// We failed to write the data. See above for possible mitigations. For now we just terminate the connection.
-			debugPrintfAlways("Write fail len=%u err=%d heap=%u\n", total, (int)rc, (unsigned)esp_get_free_heap_size());
+			debugPrintf("Write fail len=%u err=%d heap=%u\n", total, (int)rc, (unsigned)esp_get_free_heap_size());
 			Terminate(false);		// chrishamm: Not sure if this helps with LwIP v1.4.3 but it is mandatory for proper error handling with LwIP 2.0.3
 			return 0;
 		}
@@ -188,7 +188,7 @@ void Connection::Poll()
 			}
 			else
 			{
-				debugPrintfAlways("Poll: conn %u unexpected recv err=%d heap=%u\n",
+				debugPrintf("Poll: conn %u unexpected recv err=%d heap=%u\n",
 					number, (int)rc, (unsigned)esp_get_free_heap_size());
 				Terminate(false);
 			}
@@ -311,7 +311,7 @@ void Connection::Terminate(bool external)
 {
 	if (!external)
 	{
-		debugPrintfAlways("Terminate: conn %u state=%d heap=%u\n",
+		debugPrintf("Terminate: conn %u state=%d heap=%u\n",
 			number, (int)state, (unsigned)esp_get_free_heap_size());
 	}
 	if (conn) {
