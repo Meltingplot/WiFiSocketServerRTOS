@@ -37,7 +37,7 @@ jobs:
         run: |
           source ${{ github.workspace }}/ESP8266_RTOS_SDK/export.sh
           cd ${{ github.workspace }}
-          make defconfig
+          cat sdkconfig.defaults sdkconfig.defaults.esp8266 > sdkconfig
           make -j$(nproc)
 
       - name: Upload build artifact
