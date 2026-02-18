@@ -1058,15 +1058,6 @@ void ProcessRequest()
 	// Exchange headers, except for the last dword which will contain our response
 	hspi.transferDwords(messageHeaderOut.asDwords, messageHeaderIn.asDwords, headerDwords - 1);
 
-	if (hspi.hadTimeout())
-	{
-		// SPI hardware timed out — don't interpret garbage data, just end the transaction
-		debugPrintAlways("SPI timeout during header exchange\n");
-		gpio_set_level(SamSSPin, 1);
-		hspi.endTransaction();
-		return;
-	}
-
 	if (messageHeaderIn.hdr.formatVersion != MyFormatVersion)
 	{
 		SendResponse(ResponseBadRequestFormatVersion);
@@ -1840,6 +1831,7 @@ void ProcessRequest()
 				uint32_t waited = 0;
 				while (currentState != WiFiState::idle && waited < maxWaitMs)
 				{
+					esp_task_wdt_reset();
 					delay(stepMs);
 					waited += stepMs;
 				}
@@ -1990,6 +1982,16 @@ void setup()
 	Connection::Init();
 	Listener::Init();
 
+	// Subscribe the main task to the task watchdog so the module restarts
+	// if the main loop gets stuck (e.g. SPI hardware hang).
+	// The WDT timeout is configured via CONFIG_ESP_TASK_WDT_TIMEOUT_S.
+#ifdef ESP8266
+	esp_task_wdt_init();
+#else
+	esp_task_wdt_init(CONFIG_ESP_TASK_WDT_TIMEOUT_S, true);
+	esp_task_wdt_add(NULL);
+#endif
+
 	lastError = nullptr;
 	debugPrint("Init completed\n");
 	gpio_set_level(EspReqTransferPin, 1);					// tell the SAM we are ready to receive a command
@@ -1997,6 +1999,8 @@ void setup()
 
 void loop()
 {
+	esp_task_wdt_reset();
+
 	// See whether there is a request from the SAM.
 	// Duet WiFi 1.04 and earlier have hardware to ensure that TransferReady goes low when a transaction starts.
 	// Duet 3 Mini doesn't, so we need to see TransferReady go low and then high again. In case that happens so fast that we dn't get the interrupt, we have a timeout.

@@ -27,12 +27,6 @@
 #include "esp8266/spi.h"
 #include "esp8266/gpio.h"
 
-// Maximum iterations to wait for SPI hardware to complete a transaction.
-// At 80MHz CPU clock, a tight loop runs ~20-40M iterations/sec, so 500000
-// iterations is approximately 12-25ms — far longer than any SPI transaction
-// should take (a 512-bit transfer at 26.7MHz takes ~19us).
-static const uint32_t SPI_WAIT_TIMEOUT = 500000;
-
 HSPIClass::HSPIClass() {
 }
 
@@ -101,25 +95,9 @@ void HSPIClass::end() {
 	gpio_set_direction(SCK, GPIO_MODE_INPUT);
 }
 
-// Wait for SPI hardware to finish. Returns true if SPI is ready, false on timeout.
-// Sets timedOut flag on failure so callers can detect and abort the transaction.
-bool IRAM_ATTR HSPIClass::waitForSpiReady()
-{
-	for (uint32_t i = 0; i < SPI_WAIT_TIMEOUT; ++i)
-	{
-		if (!(REG(SPI_CMD(MSPI)) & SPI_USR))
-		{
-			return true;
-		}
-	}
-	timedOut = true;
-	return false;
-}
-
 // Begin a transaction without changing settings
 void IRAM_ATTR HSPIClass::beginTransaction() {
-	timedOut = false;
-	waitForSpiReady();
+	while(REG(SPI_CMD(MSPI)) & SPI_USR) {}
 }
 
 void IRAM_ATTR HSPIClass::endTransaction() {
@@ -156,13 +134,13 @@ void HSPIClass::setDataBits(uint16_t bits)
 
 uint32_t IRAM_ATTR HSPIClass::transfer32(uint32_t data)
 {
-	waitForSpiReady();
+	while(REG(SPI_CMD(MSPI)) & SPI_USR) {}
 	// Set to 32Bits transfer
 	setDataBits(32);
 	// LSBFIRST Byte first
 	REG(SPI_W0(MSPI)) = data;
 	REG(SPI_CMD(MSPI)) |= SPI_USR;
-	waitForSpiReady();
+	while(REG(SPI_CMD(MSPI)) & SPI_USR) {}
 	return REG(SPI_W0(MSPI));
 }
 
@@ -186,7 +164,7 @@ void IRAM_ATTR HSPIClass::transferDwords(const uint32_t * out, uint32_t * in, ui
 }
 
 void IRAM_ATTR HSPIClass::transferDwords_(const uint32_t * out, uint32_t * in, uint8_t size) {
-	waitForSpiReady();
+	while(REG(SPI_CMD(MSPI)) & SPI_USR) {}
 
 	// Set in/out Bits to transfer
 	setDataBits(size * 32);
@@ -208,7 +186,7 @@ void IRAM_ATTR HSPIClass::transferDwords_(const uint32_t * out, uint32_t * in, u
 	}
 
 	REG(SPI_CMD(MSPI)) |= SPI_USR;
-	waitForSpiReady();
+	while(REG(SPI_CMD(MSPI)) & SPI_USR) {}
 
 	if (in != nullptr) {
 		volatile uint32_t * fifoPtrRd = &REG(SPI_W0(MSPI));
