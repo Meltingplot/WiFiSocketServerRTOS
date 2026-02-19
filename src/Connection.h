@@ -23,7 +23,6 @@
 #include "Listener.h"
 
 constexpr uint32_t MaxReadWriteTime = 2000;		// how long we wait for a write operation to complete before it is cancelled
-constexpr uint32_t MaxAckTime = 4000;			// how long we wait for a connection to acknowledge the remaining data before it is closed
 
 class Connection
 {
@@ -70,8 +69,6 @@ private:
 	struct netconn *conn;		// the pcb that corresponds to this connection
 	Listener *listener;
 	volatile ConnState state;
-
-	uint32_t closeTimer;
 
 	struct pbuf *readBuf;		// the buffers holding data we have received that has not yet been taken
 	size_t readIndex;			// how much data we have already read from the current pbuf

@@ -18,7 +18,7 @@ static_assert(MaxConnections < CONFIG_LWIP_MAX_SOCKETS); // Limits the listen ca
 // Public interface
 Connection::Connection(uint8_t num)
 	: number(num), localPort(0), remotePort(0), remoteIp(0), conn(nullptr), state(ConnState::free),
-	closeTimer(0),readBuf(nullptr), readIndex(0), alreadyRead(0), pendOtherEndClosed(false)
+	readBuf(nullptr), readIndex(0), alreadyRead(0), pendOtherEndClosed(false)
 {
 }
 
@@ -191,34 +191,6 @@ void Connection::Poll()
 			}
 		}
 	}
-	else if (state == ConnState::closeReady)
-	{
-		// Deferred close, possibly outside the ISR
-		Close();
-	}
-	else if (state == ConnState::closePending)
-	{
-		// We're about to close this connection and we're still waiting for the remaining data to be acknowledged
-		if (!conn || !conn->pcb.tcp)
-		{
-			// Connection/PCB was lost (e.g. freed by lwIP due to RST/timeout),
-			// nothing left to wait for, close immediately
-			debugPrintf("conn %u: PCB lost during closePending\n", number);
-			SetState(ConnState::closeReady);
-			Close();
-		}
-		else if (!conn->pcb.tcp->unacked)
-		{
-			// All data has been received, close this connection next time
-			SetState(ConnState::closeReady);
-		}
-		else if (millis() - closeTimer >= MaxAckTime)
-		{
-			// The acknowledgement timer has expired, abort this connection
-			debugPrintf("conn %u: ack timeout during closePending\n", number);
-			Terminate(false);
-		}
-	}
 	else { }
 }
 
@@ -232,25 +204,7 @@ void Connection::Close()
 	switch(state)
 	{
 	case ConnState::connected:						// both ends are still connected
-		if (conn && conn->pcb.tcp && conn->pcb.tcp->unacked)
-		{
-			closeTimer = millis();
-			netconn_shutdown(conn, true, false);	// shut down receive
-			// Recheck after shutdown: the remote end may have ACK'd or RST'd
-			// during shutdown processing, clearing the unacked queue or freeing
-			// the PCB entirely. Only enter closePending if there's genuinely
-			// still data waiting to be acknowledged.
-			if (conn->pcb.tcp && conn->pcb.tcp->unacked)
-			{
-				SetState(ConnState::closePending);	// wait for the remaining data to be sent before closing
-				break;
-			}
-			// PCB was freed or all data was acked during shutdown, fall through to immediate close
-			debugPrintf("conn %u: unacked resolved during shutdown (pcb=%d)\n", number, (int)(conn->pcb.tcp != nullptr));
-		}
-		// fallthrough
 	case ConnState::otherEndClosed:					// the other end has already closed the connection
-	case ConnState::closeReady:						// the other end has closed and we were already closePending
 	default:										// should not happen
 		if (conn)
 		{
@@ -260,14 +214,6 @@ void Connection::Close()
 		}
 		FreePbuf();
 		SetState(ConnState::free);
-		if (listener)
-		{
-			listener->Notify();
-		}
-		break;
-
-	case ConnState::closePending:					// we already asked to close
-		// Should not happen, but if it does just let the close proceed when sending is complete or timeout
 		break;
 	}
 }
@@ -352,7 +298,7 @@ void Connection::Connected(Listener *listener, struct netconn* conn)
 	localPort = conn->pcb.tcp->local_port;
 	remotePort = conn->pcb.tcp->remote_port;
 	remoteIp = conn->pcb.tcp->remote_ip.u_addr.ip4.addr;
-	readIndex = alreadyRead = closeTimer = pendOtherEndClosed = 0;
+	readIndex = alreadyRead = pendOtherEndClosed = 0;
 
 	debugPrintf("conn %u: established %u.%u.%u.%u:%u -> :%u\n",
 		number, remoteIp & 0xFF, (remoteIp >> 8) & 0xFF,
@@ -501,7 +447,7 @@ void Connection::Report()
 		if (connectionList[i]->localPort == port)
 		{
 			const ConnState state = connectionList[i]->state;
-			if (state == ConnState::connected || state == ConnState::otherEndClosed || state == ConnState::closePending)
+			if (state == ConnState::connected || state == ConnState::otherEndClosed)
 			{
 				++count;
 			}
