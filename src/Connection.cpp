@@ -107,21 +107,21 @@ size_t Connection::Write(const uint8_t *data, size_t length, bool doPush, bool c
 		written = 0;
 		rc = netconn_write_partly(conn, data + total, length - total, flag, &written);
 
-		if (rc != ERR_OK && rc != ERR_WOULDBLOCK) {
+		if (rc != ERR_OK && rc != ERR_WOULDBLOCK && rc != ERR_MEM) {
 			break;
 		}
-		if (rc == ERR_WOULDBLOCK && written == 0) {
+		if ((rc == ERR_WOULDBLOCK || rc == ERR_MEM) && written == 0) {
 			break;		// send buffer full and no progress after timeout, avoid spinning
 		}
 	}
 
 	if (rc != ERR_OK)
 	{
-		if (rc == ERR_RST || rc == ERR_CLSD || rc == ERR_ABRT)
+		if (rc == ERR_RST || rc == ERR_CLSD || rc == ERR_ABRT || rc == ERR_CONN)
 		{
 			SetState(ConnState::otherEndClosed);
 		}
-		else
+		else if (rc != ERR_WOULDBLOCK && rc != ERR_MEM)
 		{
 			// We failed to write the data. See above for possible mitigations. For now we just terminate the connection.
 			debugPrintfAlways("Write fail len=%u err=%d\n", total, (int)rc);
@@ -208,8 +208,7 @@ void Connection::Close()
 	default:										// should not happen
 		if (conn)
 		{
-			netconn_close(conn);
-			netconn_delete(conn);
+			EnqueueClose(conn, 1000);				// give 1s for data flush in background
 			conn = nullptr;
 		}
 		FreePbuf();
@@ -268,10 +267,7 @@ void Connection::Terminate(bool external)
 {
 	debugPrintf("conn %u: terminate external=%d state=%d\n", number, (int)external, (int)state);
 	if (conn) {
-		// No need to pass to ConnectionTask and do a graceful close on the connection.
-		// Delete it here.
-		netconn_close(conn);
-		netconn_delete(conn);
+		EnqueueClose(conn, 1);						// minimal timeout, don't wait
 		conn = nullptr;
 	}
 	FreePbuf();
@@ -481,5 +477,37 @@ void Connection::Report()
 // Static data
 SemaphoreHandle_t Connection::allocateMutex = nullptr;
 Connection *Connection::connectionList[MaxConnections];
+QueueHandle_t Connection::closeQueue = nullptr;
+TaskHandle_t Connection::closeTaskHandle = nullptr;
+
+/*static*/ void Connection::InitCloseTask()
+{
+	closeQueue = xQueueCreate(MaxConnections, sizeof(CloseRequest));
+	xTaskCreate(CloseTask, "tcpClose", TCP_CLOSE_TASK_STACK, nullptr,
+				TCP_LISTENER_PRIO, &closeTaskHandle);
+}
+
+/*static*/ void Connection::CloseTask(void *param)
+{
+	CloseRequest req;
+	while (xQueueReceive(closeQueue, &req, portMAX_DELAY) == pdTRUE)
+	{
+		netconn_set_sendtimeout(req.conn, req.sendTimeout);
+		netconn_close(req.conn);
+		netconn_delete(req.conn);
+	}
+}
+
+/*static*/ void Connection::EnqueueClose(struct netconn *c, uint32_t sendTimeout)
+{
+	CloseRequest req = { c, sendTimeout };
+	if (closeQueue == nullptr || xQueueSend(closeQueue, &req, 0) != pdTRUE)
+	{
+		// Fallback: queue unavailable or full
+		netconn_set_sendtimeout(c, sendTimeout);
+		netconn_close(c);
+		netconn_delete(c);
+	}
+}
 
 // End

@@ -15,6 +15,7 @@
 
 #include "Config.h"
 #include "freertos/FreeRTOS.h"
+#include "freertos/task.h"
 #include "freertos/queue.h"
 #include "freertos/semphr.h"
 #include "lwip/api.h"
@@ -48,6 +49,7 @@ public:
 	static Connection *Allocate();
 
 	static void Init();
+	static void InitCloseTask();
 	static void PollAll();
 	static void TerminateAll();
 
@@ -81,8 +83,17 @@ private:
 	void Connected(Listener *listener, struct netconn *conn);
 	ConnState GetState() const { return state; }
 
+	struct CloseRequest {
+		struct netconn *conn;
+		uint32_t sendTimeout;		// ms to wait for data flush
+	};
+
 	static SemaphoreHandle_t allocateMutex;
 	static Connection *connectionList[MaxConnections];
+	static QueueHandle_t closeQueue;
+	static TaskHandle_t closeTaskHandle;
+	static void CloseTask(void *param);
+	static void EnqueueClose(struct netconn *c, uint32_t sendTimeout);
 
 	void FreePbuf();
 	void Report();
