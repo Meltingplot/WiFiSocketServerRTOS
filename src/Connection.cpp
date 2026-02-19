@@ -191,6 +191,10 @@ void Connection::Poll()
 			}
 		}
 	}
+	else if (state == ConnState::closePending)
+	{
+		Close();
+	}
 	else { }
 }
 
@@ -204,10 +208,17 @@ void Connection::Close()
 	switch(state)
 	{
 	case ConnState::connected:						// both ends are still connected
+		// Defer the actual netconn_close to the next Poll() cycle so we
+		// don't block inside the SPI transaction handler.
+		SetState(ConnState::closePending);
+		break;
+
 	case ConnState::otherEndClosed:					// the other end has already closed the connection
+	case ConnState::closePending:					// deferred close, called back from Poll()
 	default:										// should not happen
 		if (conn)
 		{
+			netconn_set_sendtimeout(conn, 1);		// don't wait for ACK
 			netconn_close(conn);
 			netconn_delete(conn);
 			conn = nullptr;
@@ -447,7 +458,7 @@ void Connection::Report()
 		if (connectionList[i]->localPort == port)
 		{
 			const ConnState state = connectionList[i]->state;
-			if (state == ConnState::connected || state == ConnState::otherEndClosed)
+			if (state == ConnState::connected || state == ConnState::otherEndClosed || state == ConnState::closePending)
 			{
 				++count;
 			}
