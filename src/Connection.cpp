@@ -196,13 +196,13 @@ void Connection::Poll()
 		const bool timeout = millis() - closeTimer >= MaxSendWaitTime;
 		if (!conn || !conn->pcb.tcp || !conn->pcb.tcp->unsent || timeout)
 		{
-			// Unsent data drained, PCB lost, or timeout — complete the close
+			// Unsent data drained, PCB lost, or timeout — complete the close.
+			// Use a short sendtimeout: data is already on the wire, we just
+			// need one WiFi RTT for FIN/ACK. Don't use the default 2000ms
+			// as that blocks the main loop.
 			if (conn)
 			{
-				if (timeout)
-				{
-					netconn_set_sendtimeout(conn, 1);	// abort, don't block
-				}
+				netconn_set_sendtimeout(conn, timeout ? 1 : 100);
 				netconn_close(conn);
 				netconn_delete(conn);
 				conn = nullptr;
