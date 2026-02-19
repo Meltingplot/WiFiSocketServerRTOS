@@ -49,7 +49,6 @@ public:
 	static Connection *Allocate();
 
 	static void Init();
-	static void InitCloseTask();
 	static void PollAll();
 	static void TerminateAll();
 
@@ -87,15 +86,6 @@ private:
 
 	static SemaphoreHandle_t allocateMutex;
 	static Connection *connectionList[MaxConnections];
-
-	struct CloseRequest {
-		struct netconn *conn;
-		uint32_t sendTimeout;
-	};
-	static QueueHandle_t closeQueue;
-	static TaskHandle_t closeTaskHandle;
-	static void CloseTask(void *param);
-	static void EnqueueClose(struct netconn *c, uint32_t sendTimeout);
 
 	void FreePbuf();
 	void Report();
