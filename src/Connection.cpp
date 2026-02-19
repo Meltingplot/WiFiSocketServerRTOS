@@ -140,7 +140,7 @@ size_t Connection::CanWrite() const
 {
 	// Return the amount of free space in the write buffer
 	// Note: we cannot necessarily write this amount, because it depends on memory allocations being successful.
-	return ((state == ConnState::connected && !pendOtherEndClosed) && conn->pcb.tcp) ?
+	return ((state == ConnState::connected && !pendOtherEndClosed) && conn && conn->pcb.tcp) ?
 		std::min((size_t)tcp_sndbuf(conn->pcb.tcp), MaxDataLength) : 0;
 }
 
@@ -199,9 +199,10 @@ void Connection::Poll()
 		if (!conn || !conn->pcb.tcp)
 		{
 			// Connection/PCB was lost (e.g. freed by lwIP due to RST/timeout),
-			// nothing left to wait for, proceed to close
+			// nothing left to wait for, close immediately
 			debugPrintf("conn %u: PCB lost during closePending\n", number);
 			SetState(ConnState::closeReady);
+			Close();
 		}
 		else if (!conn->pcb.tcp->unacked)
 		{
@@ -232,15 +233,17 @@ void Connection::Close()
 		{
 			closeTimer = millis();
 			netconn_shutdown(conn, true, false);	// shut down receive
-			// Check if the PCB survived the shutdown. If the remote end already
-			// closed/reset the connection, lwIP may free the PCB during shutdown.
-			if (conn->pcb.tcp)
+			// Recheck after shutdown: the remote end may have ACK'd or RST'd
+			// during shutdown processing, clearing the unacked queue or freeing
+			// the PCB entirely. Only enter closePending if there's genuinely
+			// still data waiting to be acknowledged.
+			if (conn->pcb.tcp && conn->pcb.tcp->unacked)
 			{
 				SetState(ConnState::closePending);	// wait for the remaining data to be sent before closing
 				break;
 			}
-			// PCB was freed during shutdown, fall through to immediate close
-			debugPrintf("conn %u: PCB lost during shutdown\n", number);
+			// PCB was freed or all data was acked during shutdown, fall through to immediate close
+			debugPrintf("conn %u: unacked resolved during shutdown (pcb=%d)\n", number, (int)(conn->pcb.tcp != nullptr));
 		}
 		// fallthrough
 	case ConnState::otherEndClosed:					// the other end has already closed the connection
@@ -389,7 +392,8 @@ void Connection::Report()
 
 		"aborted",				// an error has occurred
 		"closePending",			// close this socket when sending is complete
-		"closeReady"			// about to be closed
+		"closeReady",			// about to be closed
+		"allocated"				// allocated but not yet connected
 	};
 
 	const unsigned int st = (int)state;
