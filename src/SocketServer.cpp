@@ -1922,7 +1922,11 @@ void setup()
 	xTaskCreate(StatePrintTask, "statePrint", STATE_PRINT_STACK, NULL, tskIDLE_PRIORITY, NULL);
 #endif
 
+#ifdef DEBUG
+	esp_log_level_set("wifi", ESP_LOG_WARN);
+#else
 	esp_log_level_set("wifi", ESP_LOG_NONE);
+#endif
 
 	wirelessConfigMgr->Init();
 
