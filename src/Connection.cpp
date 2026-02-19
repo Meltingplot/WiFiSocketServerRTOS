@@ -193,13 +193,16 @@ void Connection::Poll()
 	}
 	else if (state == ConnState::closePending)
 	{
-		if (!conn || !conn->pcb.tcp || !conn->pcb.tcp->unsent
-			|| millis() - closeTimer >= MaxSendWaitTime)
+		const bool timeout = millis() - closeTimer >= MaxSendWaitTime;
+		if (!conn || !conn->pcb.tcp || !conn->pcb.tcp->unsent || timeout)
 		{
-			// Unsent data drained (or timeout/PCB lost) — complete the close
+			// Unsent data drained, PCB lost, or timeout — complete the close
 			if (conn)
 			{
-				netconn_set_sendtimeout(conn, 1);
+				if (timeout)
+				{
+					netconn_set_sendtimeout(conn, 1);	// abort, don't block
+				}
 				netconn_close(conn);
 				netconn_delete(conn);
 				conn = nullptr;
@@ -221,22 +224,16 @@ void Connection::Close()
 	switch(state)
 	{
 	case ConnState::connected:						// both ends are still connected
-		if (conn && conn->pcb.tcp && conn->pcb.tcp->unsent)
-		{
-			// Data still queued for transmission — defer close to let
-			// lwIP finish sending before we tear down the connection.
-			closeTimer = millis();
-			SetState(ConnState::closePending);
-			break;
-		}
-		// No unsent data — safe to close inline (won't block)
-		// fall through
+		// Defer the actual close to Poll() so we don't block the SPI handler.
+		// Poll() will wait for unsent data to drain, then do the close.
+		closeTimer = millis();
+		SetState(ConnState::closePending);
+		break;
 
 	case ConnState::otherEndClosed:					// the other end has already closed the connection
 	default:										// should not happen
 		if (conn)
 		{
-			netconn_set_sendtimeout(conn, 1);		// don't wait for ACK
 			netconn_close(conn);
 			netconn_delete(conn);
 			conn = nullptr;
