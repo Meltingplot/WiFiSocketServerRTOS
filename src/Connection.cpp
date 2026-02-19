@@ -97,7 +97,7 @@ size_t Connection::Write(const uint8_t *data, size_t length, bool doPush, bool c
 	// Try to send all the data
 	const bool push = doPush || closeAfterSending;
 
-	u8_t flag = NETCONN_COPY | (push ? NETCONN_MORE : 0);
+	u8_t flag = NETCONN_COPY | (push ? 0 : NETCONN_MORE);
 
 	size_t total = 0;
 	size_t written = 0;
