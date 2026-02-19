@@ -209,6 +209,10 @@ void Connection::Poll()
 			}
 			FreePbuf();
 			SetState(ConnState::free);
+			if (listener)
+			{
+				listener->Notify();
+			}
 		}
 	}
 	else { }
@@ -240,6 +244,10 @@ void Connection::Close()
 		}
 		FreePbuf();
 		SetState(ConnState::free);
+		if (listener)
+		{
+			listener->Notify();
+		}
 		break;
 
 	case ConnState::closePending:					// already pending, let Poll() handle it
