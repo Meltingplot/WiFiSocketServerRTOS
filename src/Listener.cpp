@@ -239,6 +239,7 @@ void Listener::Notify()
 						}
 						else
 						{
+							debugPrintf("accept failed on port %u: rc=%d\n", listener->port, (int)rc);
 							c->Deallocate();
 						}
 					}
