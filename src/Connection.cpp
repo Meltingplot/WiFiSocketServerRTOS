@@ -234,6 +234,7 @@ void Connection::Close()
 	default:										// should not happen
 		if (conn)
 		{
+			netconn_set_sendtimeout(conn, 1);		// other end is gone, don't block
 			netconn_close(conn);
 			netconn_delete(conn);
 			conn = nullptr;
