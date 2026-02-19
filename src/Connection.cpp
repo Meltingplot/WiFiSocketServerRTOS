@@ -208,7 +208,8 @@ void Connection::Close()
 	default:										// should not happen
 		if (conn)
 		{
-			EnqueueClose(conn, 1000);				// give 1s for data flush in background
+			netconn_close(conn);
+			netconn_delete(conn);
 			conn = nullptr;
 		}
 		FreePbuf();
@@ -267,7 +268,10 @@ void Connection::Terminate(bool external)
 {
 	debugPrintf("conn %u: terminate external=%d state=%d\n", number, (int)external, (int)state);
 	if (conn) {
-		EnqueueClose(conn, 1);						// minimal timeout, don't wait
+		// No need to pass to ConnectionTask and do a graceful close on the connection.
+		// Delete it here.
+		netconn_close(conn);
+		netconn_delete(conn);
 		conn = nullptr;
 	}
 	FreePbuf();
@@ -477,37 +481,5 @@ void Connection::Report()
 // Static data
 SemaphoreHandle_t Connection::allocateMutex = nullptr;
 Connection *Connection::connectionList[MaxConnections];
-QueueHandle_t Connection::closeQueue = nullptr;
-TaskHandle_t Connection::closeTaskHandle = nullptr;
-
-/*static*/ void Connection::InitCloseTask()
-{
-	closeQueue = xQueueCreate(MaxConnections, sizeof(CloseRequest));
-	xTaskCreate(CloseTask, "tcpClose", TCP_CLOSE_TASK_STACK, nullptr,
-				TCP_LISTENER_PRIO, &closeTaskHandle);
-}
-
-/*static*/ void Connection::CloseTask(void *param)
-{
-	CloseRequest req;
-	while (xQueueReceive(closeQueue, &req, portMAX_DELAY) == pdTRUE)
-	{
-		netconn_set_sendtimeout(req.conn, req.sendTimeout);
-		netconn_close(req.conn);
-		netconn_delete(req.conn);
-	}
-}
-
-/*static*/ void Connection::EnqueueClose(struct netconn *c, uint32_t sendTimeout)
-{
-	CloseRequest req = { c, sendTimeout };
-	if (closeQueue == nullptr || xQueueSend(closeQueue, &req, 0) != pdTRUE)
-	{
-		// Fallback: queue unavailable or full
-		netconn_set_sendtimeout(c, sendTimeout);
-		netconn_close(c);
-		netconn_delete(c);
-	}
-}
 
 // End
