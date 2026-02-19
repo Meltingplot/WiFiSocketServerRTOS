@@ -2,11 +2,11 @@
 
 ## Summary
 
-Investigation of connection instability in the Duet3D WiFiSocketServerRTOS firmware under load (file upload + multiple DWC polling clients). The original `closePending` code had the right idea — defer close to avoid blocking — but contained bugs that caused connection stalls and resource exhaustion.
+Investigation of connection instability in the Duet3D WiFiSocketServerRTOS firmware under load (file upload + multiple DWC polling clients). The original `closePending` code had the right idea — defer close to avoid blocking — but contained bugs that caused resource exhaustion and connection stalls.
 
 An intermediate approach of removing closePending entirely (closing connections immediately) was tested. It worked on fast WiFi but blocked the SPI main loop for up to 2 seconds per close on slow WiFi, freezing all communication with the SAM processor.
 
-The final fix keeps closePending but corrects its bugs: adds the missing listener notification, waits for unsent data instead of unacked, uses a short sendtimeout, and adds null safety. Combined with ERR_MEM resilience and several pre-existing bug fixes in the original code.
+The final fix keeps closePending but corrects its bugs: waits for unsent data instead of unacked, removes the blocking netconn_shutdown, uses a short sendtimeout, and adds null safety. Combined with ERR_MEM resilience and several pre-existing bug fixes in the original code.
 
 ---
 
@@ -14,36 +14,15 @@ The final fix keeps closePending but corrects its bugs: adds the missing listene
 
 `netconn_close()` is a blocking call — it sends a TCP FIN and waits for FIN/ACK, blocking up to `sendtimeout` (default 2000ms). `Close()` runs in the SPI main loop context. Blocking there freezes SPI communication with the SAM processor, causing cascading failures: the SAM reports SPI timeouts, stops sending data, and all connections stall.
 
-The original code's closePending deferred the blocking `netconn_close()` to `Poll()`, which was the right approach. But its implementation had three critical bugs.
+The original code's closePending deferred the blocking `netconn_close()` to `Poll()`, which was the right approach. But its implementation had bugs that caused resource exhaustion under DWC connection churn.
 
 ---
 
 ## What Was Broken in the Original closePending
 
-### Bug 1: Missing Listener Notification (The Flow Error)
+### Bug 1: Waiting for Unacked Instead of Unsent
 
-**The most critical bug.** When `Poll()` completed a closePending→free transition, it never called `listener->Notify()`. The `ListenerTask` — the only consumer of the TCP accept backlog — blocks on `xTaskNotifyWait(portMAX_DELAY)` and only wakes from:
-
-1. `ListenCallback` — fires on new incoming SYN (ISR context)
-2. `Notify()` — explicit wake-up
-
-Without Notify() on slot-free, this deadlock occurred:
-
-```
-T=0    All 8 slots occupied
-T=1    Connection finishes → closePending
-T=2    New SYN arrives → ListenCallback → sets notification bit
-T=3    ListenerTask wakes, no free slot → can't accept
-T=4    Poll() frees the slot
-       ❌ No Notify() → ListenerTask stays blocked
-       Backlog grows until next SYN triggers ListenCallback
-```
-
-In the worst case, all slots freed but no SYN arrived — server appeared completely dead with all slots showing free.
-
-### Bug 2: Waiting for Unacked Instead of Unsent
-
-The original waited for `conn->pcb.tcp->unacked` to drain (up to 4 seconds). For DWC HTTP connections, this wait is futile:
+The main issue. The original waited for `conn->pcb.tcp->unacked` to drain (up to 4 seconds). For DWC HTTP connections, this wait is futile:
 
 ```
 T=0ms    Server sends HTTP response → data enters unacked queue
@@ -57,15 +36,21 @@ The ACK is never sent because the client's RST preempts it. closePending held a 
 
 **Unsent vs unacked**: Unsent data is queued but not yet handed to the IP layer. It drains in one `tcp_output()` call (microseconds on fast WiFi, one WiFi RTT on slow). Waiting for unsent is the correct threshold — once data reaches the IP layer, lwIP handles retransmission internally regardless of whether we hold the PCB.
 
-### Bug 3: netconn_shutdown() Blocking in Close()
+### Bug 2: netconn_shutdown() Blocking in Close()
 
 The original Close() called `netconn_shutdown(conn, true, false)` before entering closePending. This is a synchronous call through `tcpip_apimsg` — it blocks the SPI main loop until the lwIP thread processes it. And shutting down just the receive side was pointless since we don't read data during closePending anyway.
 
-### Additional Issues in the Original closePending
+### Bug 3: No Null Guards
 
-- **No null guards** — `conn->pcb.tcp->unacked` crashed if lwIP freed the PCB during closePending (e.g., RST received)
-- **Timeout went to aborted** — `Terminate(false)` set state to aborted instead of free, requiring a round-trip to RRF to reclaim the slot
-- **closeReady re-entrance** — closeReady→Close() re-entered Close() which could block again with netconn_close
+`conn->pcb.tcp->unacked` was accessed without null checks. If lwIP freed the PCB during the closePending wait (e.g., RST received), this crashed.
+
+### Bug 4: Timeout Went to Aborted Instead of Free
+
+When the closePending timeout expired, the original called `Terminate(false)` which set the state to `aborted` instead of `free`. The aborted state requires a round-trip to RRF to reclaim the slot — adding latency under the highest-pressure conditions when you need slots freed fastest.
+
+### Bug 5: closeReady Re-entrance
+
+The original used a `closeReady` intermediate state: closePending→closeReady→Close(). The Close() re-entrance could block the SPI main loop again with `netconn_close()`.
 
 ---
 
@@ -112,6 +97,20 @@ else if (state == ConnState::closePending)
 - **100ms sendtimeout** — enough for FIN/ACK, won't block the main loop long
 - **1ms on timeout** — abort path, don't wait at all
 - **Direct free + Notify** — slot available immediately, listener wakes to drain backlog
+
+### Data Safety: Why Freeing the Slot Before Unacked Drains Is Safe
+
+Freeing the connection slot while lwIP still has unacked data does not cause data corruption. When `Write()` calls `netconn_write_partly()`, the data is **copied** into lwIP-owned pbufs (the `NETCONN_COPY` flag is set, and `LWIP_NETIF_TX_SINGLE_PBUF` forces a copy). The TCP PCB owns its own independent send buffer chain — the connection slot holds no send data.
+
+When we free the slot:
+1. `netconn_close(conn)` sends FIN — PCB transitions to FIN_WAIT states
+2. `netconn_delete(conn)` frees the netconn struct, but the TCP PCB continues to live in lwIP's internal lists
+3. We set `conn = nullptr`, free receive buffers, mark slot `free`
+4. lwIP continues retransmitting unacked data from its own pbufs, completely independently
+
+When RRF reuses the slot for a new connection, it gets a brand new `netconn` with a brand new TCP PCB. The old PCB's retransmission buffers are entirely separate — no shared memory.
+
+If `netconn_close()` times out (100ms) and `netconn_delete()` sends RST instead, the unacked data is abandoned — but it was already transmitted (unsent was empty), and the RST tells the client the connection is gone.
 
 ---
 
