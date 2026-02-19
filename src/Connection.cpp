@@ -195,7 +195,13 @@ void Connection::Poll()
 	else if (state == ConnState::closePending)
 	{
 		// We're about to close this connection and we're still waiting for the remaining data to be acknowledged
-		if (conn->pcb.tcp && !conn->pcb.tcp->unacked)
+		if (!conn || !conn->pcb.tcp)
+		{
+			// Connection/PCB was lost (e.g. freed by lwIP due to RST/timeout),
+			// nothing left to wait for, proceed to close
+			SetState(ConnState::closeReady);
+		}
+		else if (!conn->pcb.tcp->unacked)
 		{
 			// All data has been received, close this connection next time
 			SetState(ConnState::closeReady);
@@ -218,12 +224,18 @@ void Connection::Close()
 	switch(state)
 	{
 	case ConnState::connected:						// both ends are still connected
-		if (conn->pcb.tcp && conn->pcb.tcp->unacked)
+		if (conn && conn->pcb.tcp && conn->pcb.tcp->unacked)
 		{
 			closeTimer = millis();
-			netconn_shutdown(conn, true, false);	// shut down recieve
-			SetState(ConnState::closePending);		// wait for the remaining data to be sent before closing
-			break;
+			netconn_shutdown(conn, true, false);	// shut down receive
+			// Check if the PCB survived the shutdown. If the remote end already
+			// closed/reset the connection, lwIP may free the PCB during shutdown.
+			if (conn->pcb.tcp)
+			{
+				SetState(ConnState::closePending);	// wait for the remaining data to be sent before closing
+				break;
+			}
+			// PCB was freed during shutdown, fall through to immediate close
 		}
 		// fallthrough
 	case ConnState::otherEndClosed:					// the other end has already closed the connection
@@ -303,7 +315,13 @@ void Connection::Terminate(bool external)
 	}
 	FreePbuf();
 	SetState((external) ? ConnState::free : ConnState::aborted);
-	listener->Notify();
+	// Only notify the listener when a slot actually becomes free.
+	// When external=false the slot goes to 'aborted' (waiting for the
+	// Duet to acknowledge), so there is no free slot to accept into.
+	if (external)
+	{
+		listener->Notify();
+	}
 }
 
 void Connection::Accept(Listener *listener, struct netconn* conn, uint8_t protocol)
