@@ -97,7 +97,7 @@ size_t Connection::Write(const uint8_t *data, size_t length, bool doPush, bool c
 	// Try to send all the data
 	const bool push = doPush || closeAfterSending;
 
-	u8_t flag = NETCONN_COPY | (push ? NETCONN_MORE : 0);
+	u8_t flag = NETCONN_COPY | (push ? 0 : NETCONN_MORE);
 
 	size_t total = 0;
 	size_t written = 0;
@@ -107,18 +107,21 @@ size_t Connection::Write(const uint8_t *data, size_t length, bool doPush, bool c
 		written = 0;
 		rc = netconn_write_partly(conn, data + total, length - total, flag, &written);
 
-		if (rc != ERR_OK && rc != ERR_WOULDBLOCK) {
+		if (rc != ERR_OK && rc != ERR_WOULDBLOCK && rc != ERR_MEM) {
 			break;
+		}
+		if ((rc == ERR_WOULDBLOCK || rc == ERR_MEM) && written == 0) {
+			break;		// send buffer full and no progress after timeout, avoid spinning
 		}
 	}
 
 	if (rc != ERR_OK)
 	{
-		if (rc == ERR_RST || rc == ERR_CLSD)
+		if (rc == ERR_RST || rc == ERR_CLSD || rc == ERR_ABRT || rc == ERR_CONN)
 		{
 			SetState(ConnState::otherEndClosed);
 		}
-		else
+		else if (rc != ERR_WOULDBLOCK && rc != ERR_MEM)
 		{
 			// We failed to write the data. See above for possible mitigations. For now we just terminate the connection.
 			debugPrintfAlways("Write fail len=%u err=%d\n", total, (int)rc);
@@ -133,14 +136,14 @@ size_t Connection::Write(const uint8_t *data, size_t length, bool doPush, bool c
 		Close();
 	}
 
-	return length;
+	return total;
 }
 
 size_t Connection::CanWrite() const
 {
 	// Return the amount of free space in the write buffer
 	// Note: we cannot necessarily write this amount, because it depends on memory allocations being successful.
-	return ((state == ConnState::connected && !pendOtherEndClosed) && conn->pcb.tcp) ?
+	return ((state == ConnState::connected && !pendOtherEndClosed) && conn && conn->pcb.tcp) ?
 		std::min((size_t)tcp_sndbuf(conn->pcb.tcp), MaxDataLength) : 0;
 }
 
@@ -162,9 +165,9 @@ void Connection::Poll()
 			rc = netconn_recv_tcp_pbuf_flags(conn, &data, NETCONN_NOAUTORCVD);
 		}
 
-		if (rc != ERR_WOULDBLOCK)
+		if (rc != ERR_WOULDBLOCK && rc != ERR_TIMEOUT)
 		{
-			if (rc == ERR_RST || rc == ERR_CLSD || rc == ERR_CONN)
+			if (rc == ERR_RST || rc == ERR_CLSD || rc == ERR_CONN || rc == ERR_ABRT)
 			{
 				// Pend setting the state to other end closed if there is data to be read.
 				// Otherwise, set it immediately. This is to avoid a case when a socket in RRF
@@ -187,23 +190,26 @@ void Connection::Poll()
 			}
 		}
 	}
-	else if (state == ConnState::closeReady)
-	{
-		// Deferred close, possibly outside the ISR
-		Close();
-	}
 	else if (state == ConnState::closePending)
 	{
-		// We're about to close this connection and we're still waiting for the remaining data to be acknowledged
-		if (conn->pcb.tcp && !conn->pcb.tcp->unacked)
+		const bool timeout = millis() - closeTimer >= MaxSendWaitTime;
+		if (!conn || !conn->pcb.tcp || !conn->pcb.tcp->unsent || timeout)
 		{
-			// All data has been received, close this connection next time
-			SetState(ConnState::closeReady);
-		}
-		else if (millis() - closeTimer >= MaxAckTime)
-		{
-			// The acknowledgement timer has expired, abort this connection
-			Terminate(false);
+			// Unsent data drained, PCB lost, or timeout — complete the close.
+			// Use a short sendtimeout so netconn_close doesn't block the main loop.
+			if (conn)
+			{
+				netconn_set_sendtimeout(conn, timeout ? 1 : 100);
+				netconn_close(conn);
+				netconn_delete(conn);
+				conn = nullptr;
+			}
+			FreePbuf();
+			SetState(ConnState::free);
+			if (listener)
+			{
+				listener->Notify();
+			}
 		}
 	}
 	else { }
@@ -218,16 +224,13 @@ void Connection::Close()
 	switch(state)
 	{
 	case ConnState::connected:						// both ends are still connected
-		if (conn->pcb.tcp && conn->pcb.tcp->unacked)
-		{
-			closeTimer = millis();
-			netconn_shutdown(conn, true, false);	// shut down recieve
-			SetState(ConnState::closePending);		// wait for the remaining data to be sent before closing
-			break;
-		}
-		// fallthrough
+		// Defer the actual close to Poll() so we don't block the SPI handler.
+		// Poll() will wait for unsent data to drain, then do the close.
+		closeTimer = millis();
+		SetState(ConnState::closePending);
+		break;
+
 	case ConnState::otherEndClosed:					// the other end has already closed the connection
-	case ConnState::closeReady:						// the other end has closed and we were already closePending
 	default:										// should not happen
 		if (conn)
 		{
@@ -237,11 +240,13 @@ void Connection::Close()
 		}
 		FreePbuf();
 		SetState(ConnState::free);
-		listener->Notify();
+		if (listener)
+		{
+			listener->Notify();
+		}
 		break;
 
-	case ConnState::closePending:					// we already asked to close
-		// Should not happen, but if it does just let the close proceed when sending is complete or timeout
+	case ConnState::closePending:					// already pending, let Poll() handle it
 		break;
 	}
 }
@@ -289,7 +294,7 @@ bool Connection::Connect(uint8_t protocol, uint32_t remoteIp, uint16_t remotePor
 		debugPrintAlways("can't allocate connection\n");
 	}
 
-	return true;
+	return false;
 }
 
 void Connection::Terminate(bool external)
@@ -303,7 +308,10 @@ void Connection::Terminate(bool external)
 	}
 	FreePbuf();
 	SetState((external) ? ConnState::free : ConnState::aborted);
-	listener->Notify();
+	if (external && listener)
+	{
+		listener->Notify();
+	}
 }
 
 void Connection::Accept(Listener *listener, struct netconn* conn, uint8_t protocol)
@@ -361,7 +369,8 @@ void Connection::Report()
 
 		"aborted",				// an error has occurred
 		"closePending",			// close this socket when sending is complete
-		"closeReady"			// about to be closed
+		"closeReady",			// about to be closed
+		"allocated"				// allocated but not yet connected
 	};
 
 	const unsigned int st = (int)state;
@@ -440,7 +449,8 @@ void Connection::Report()
 	// specifically after the state == free check, at which point is
 	// pre-empted by the ConnectionTask executing the same code, the allocated
 	// Connection will have been already spent.
-	xSemaphoreTake(allocateMutex, portMAX_DELAY);
+	if (!allocateMutex) { return nullptr; }
+	if (xSemaphoreTake(allocateMutex, pdMS_TO_TICKS(200)) != pdTRUE) { return nullptr; }
 	for (size_t i = 0; i < MaxConnections; ++i)
 	{
 		if (connectionList[i]->state == ConnState::free)
