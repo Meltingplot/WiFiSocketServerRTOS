@@ -72,14 +72,14 @@ const uint8_t Backlog = 8;
 #ifdef DEBUG
 #include "rom/ets_sys.h"
 #define debugPrint(_str)			ets_printf("%s(%d): %s", __FILE__, __LINE__, _str)
-#define debugPrintf(_format, ...)	ets_printf("%s(%d): ", __FILE__, __LINE__); ets_printf(_format, __VA_ARGS__)
+#define debugPrintf(_format, ...)	ets_printf("%s(%d): " _format, __FILE__, __LINE__, ##__VA_ARGS__)
 #else
 #define debugPrint(_format)			do {} while(false)
 #define debugPrintf(_format, ...)	do {} while(false)
 #endif
 
 #define debugPrintAlways(_str)			ets_printf("%s(%d): %s", __FILE__, __LINE__, _str)
-#define debugPrintfAlways(_format, ...)	ets_printf("%s(%d): ", __FILE__, __LINE__); ets_printf(_format, __VA_ARGS__)
+#define debugPrintfAlways(_format, ...)	ets_printf("%s(%d): " _format, __FILE__, __LINE__, ##__VA_ARGS__)
 
 
 #define MAIN_PRIO								(ESP_TASK_TCPIP_PRIO + 1)

@@ -88,7 +88,7 @@ private:
 	static Connection *connectionList[MaxConnections];
 
 	void FreePbuf();
-	void Report();
+	int Report(char *buf, size_t bufSize);
 
 	static void ConnectCallback(struct netconn *conn, enum netconn_evt evt, u16_t len);
 

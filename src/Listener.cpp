@@ -220,12 +220,15 @@ void Listener::Notify()
 				const uint16_t numConns = Connection::CountConnectionsOnPort(listener->port);
 				if (numConns < listener->maxConnections)
 				{
-					Connection * const c = Connection::Allocate();
-					if (c != nullptr)
+					// Try accept first to avoid allocating a Connection slot on spurious
+					// notifications (e.g. from Connection::Close/Terminate calling Notify
+					// when a slot is freed but no new connection is pending).
+					struct netconn *newConn;
+					err_t rc = netconn_accept(listener->conn, &newConn);
+					if (rc == ERR_OK)
 					{
-						struct netconn *newConn;
-						err_t rc = netconn_accept(listener->conn, &newConn);
-						if (rc == ERR_OK)
+						Connection * const c = Connection::Allocate();
+						if (c != nullptr)
 						{
 							netconn_set_nonblocking(newConn, true);
 							netconn_set_recvtimeout(newConn, MaxReadWriteTime);
@@ -239,12 +242,19 @@ void Listener::Notify()
 						}
 						else
 						{
-							c->Deallocate();
+							// Accepted a connection but no free slot; close it so the client
+							// can retry rather than leaving it hanging.
+							netconn_close(newConn);
+							netconn_delete(newConn);
+							debugPrintfAlways("connection on port %u rejected, no free conn\n", listener->port);
 						}
 					}
-					else
+					else if (rc != ERR_WOULDBLOCK)
 					{
-						debugPrintfAlways("pend connection on port %u no free conn\n", listener->port);
+						// ERR_WOULDBLOCK is normal when notified by Notify() after a
+						// connection is freed but no new connection is actually pending.
+						// Log other errors as they indicate real problems.
+						debugPrintfAlways("accept failed on port %u: rc=%d\n", listener->port, (int)rc);
 					}
 				}
 				else

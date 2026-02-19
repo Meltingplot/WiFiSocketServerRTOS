@@ -4,6 +4,7 @@
  *  Created on: 11 Apr 2017
  *      Author: David
  */
+#include <cstdio>			// snprintf
 #include <cstring> 			// memcpy
 #include <algorithm>			// for std::min
 
@@ -203,6 +204,7 @@ void Connection::Poll()
 		else if (millis() - closeTimer >= MaxAckTime)
 		{
 			// The acknowledgement timer has expired, abort this connection
+			debugPrintf("conn %u: lost during closePending\n", number);
 			Terminate(false);
 		}
 	}
@@ -215,6 +217,7 @@ void Connection::Poll()
 // which will free it up.
 void Connection::Close()
 {
+	debugPrintf("conn %u: close requested, state=%u\n", number, (unsigned)state);
 	switch(state)
 	{
 	case ConnState::connected:						// both ends are still connected
@@ -294,6 +297,7 @@ bool Connection::Connect(uint8_t protocol, uint32_t remoteIp, uint16_t remotePor
 
 void Connection::Terminate(bool external)
 {
+	debugPrintf("conn %u: terminate external=%u state=%u\n", number, (unsigned)external, (unsigned)state);
 	if (conn) {
 		// No need to pass to ConnectionTask and do a graceful close on the connection.
 		// Delete it here.
@@ -326,6 +330,9 @@ void Connection::Connected(Listener *listener, struct netconn* conn)
 	// This should also be free from being taken by Connection::Allocate, since the previous
 	// state is not ConnState::free (Connection::Allocate sets the state to ConnState::allocated.).
 	SetState(ConnState::connected);
+	debugPrintf("conn %u: established %u.%u.%u.%u:%u -> :%u\n",
+		number, remoteIp & 255, (remoteIp >> 8) & 255, (remoteIp >> 16) & 255, (remoteIp >> 24) & 255,
+		remotePort, localPort);
 }
 
 void Connection::GetStatus(ConnStatusResponse& resp) const
@@ -349,7 +356,7 @@ void Connection::FreePbuf()
 	}
 }
 
-void Connection::Report()
+int Connection::Report(char *buf, size_t bufSize)
 {
 	// The following must be kept in the same order as the declarations in class ConnState
 	static const char* const connStateText[] =
@@ -364,12 +371,14 @@ void Connection::Report()
 		"closeReady"			// about to be closed
 	};
 
-	const unsigned int st = (int)state;
-	ets_printf("%s", (st < ARRAY_SIZE(connStateText)) ? connStateText[st]: "unknown");
-	if (state != ConnState::free)
+	const unsigned int st = (unsigned int)state;
+	int pos = snprintf(buf, bufSize, "%s", (st < ARRAY_SIZE(connStateText)) ? connStateText[st]: "unknown");
+	if (state != ConnState::free && pos > 0 && (size_t)pos < bufSize)
 	{
-		ets_printf(" %u, %u, %u.%u.%u.%u", localPort, remotePort, remoteIp & 255, (remoteIp >> 8) & 255, (remoteIp >> 16) & 255, (remoteIp >> 24) & 255);
+		pos += snprintf(buf + pos, bufSize - pos, " %u, %u, %u.%u.%u.%u",
+			localPort, remotePort, remoteIp & 255, (remoteIp >> 8) & 255, (remoteIp >> 16) & 255, (remoteIp >> 24) & 255);
 	}
+	return (pos > 0) ? pos : 0;
 }
 
 // Static functions
@@ -403,13 +412,22 @@ void Connection::Report()
 
 /*static*/ void Connection::ReportConnections()
 {
-	ets_printf("Conns");
+	// Build the entire line in a buffer to avoid interleaving with other tasks' output
+	char buf[320];
+	int pos = snprintf(buf, sizeof(buf), "Conns:");
 	for (size_t i = 0; i < MaxConnections; ++i)
 	{
-		ets_printf("%c %u:", (i == 0) ? ':' : ',', i);
-		connectionList[i]->Report();
+		if (i > 0)
+		{
+			pos += snprintf(buf + pos, sizeof(buf) - pos, ",");
+		}
+		pos += snprintf(buf + pos, sizeof(buf) - pos, " %u:", (unsigned)i);
+		if ((size_t)pos < sizeof(buf))
+		{
+			pos += connectionList[i]->Report(buf + pos, sizeof(buf) - pos);
+		}
 	}
-	ets_printf("\n");
+	ets_printf("%s\n", buf);
 }
 
 /*static*/ void Connection::GetSummarySocketStatus(uint16_t& connectedSockets, uint16_t& otherEndClosedSockets)
