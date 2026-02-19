@@ -110,11 +110,14 @@ size_t Connection::Write(const uint8_t *data, size_t length, bool doPush, bool c
 		if (rc != ERR_OK && rc != ERR_WOULDBLOCK) {
 			break;
 		}
+		if (rc == ERR_WOULDBLOCK && written == 0) {
+			break;		// send buffer full and no progress after timeout, avoid spinning
+		}
 	}
 
 	if (rc != ERR_OK)
 	{
-		if (rc == ERR_RST || rc == ERR_CLSD)
+		if (rc == ERR_RST || rc == ERR_CLSD || rc == ERR_ABRT)
 		{
 			SetState(ConnState::otherEndClosed);
 		}
@@ -133,7 +136,7 @@ size_t Connection::Write(const uint8_t *data, size_t length, bool doPush, bool c
 		Close();
 	}
 
-	return length;
+	return total;
 }
 
 size_t Connection::CanWrite() const
@@ -162,10 +165,10 @@ void Connection::Poll()
 			rc = netconn_recv_tcp_pbuf_flags(conn, &data, NETCONN_NOAUTORCVD);
 		}
 
-		if (rc != ERR_WOULDBLOCK)
+		if (rc != ERR_WOULDBLOCK && rc != ERR_TIMEOUT)
 		{
 			debugPrintf("conn %u: poll recv rc=%d state=%d\n", number, (int)rc, (int)state);
-			if (rc == ERR_RST || rc == ERR_CLSD || rc == ERR_CONN)
+			if (rc == ERR_RST || rc == ERR_CLSD || rc == ERR_CONN || rc == ERR_ABRT)
 			{
 				// Pend setting the state to other end closed if there is data to be read.
 				// Otherwise, set it immediately. This is to avoid a case when a socket in RRF
@@ -257,7 +260,10 @@ void Connection::Close()
 		}
 		FreePbuf();
 		SetState(ConnState::free);
-		listener->Notify();
+		if (listener)
+		{
+			listener->Notify();
+		}
 		break;
 
 	case ConnState::closePending:					// we already asked to close
@@ -309,7 +315,7 @@ bool Connection::Connect(uint8_t protocol, uint32_t remoteIp, uint16_t remotePor
 		debugPrintAlways("can't allocate connection\n");
 	}
 
-	return true;
+	return false;
 }
 
 void Connection::Terminate(bool external)
@@ -327,7 +333,7 @@ void Connection::Terminate(bool external)
 	// Only notify the listener when a slot actually becomes free.
 	// When external=false the slot goes to 'aborted' (waiting for the
 	// Duet to acknowledge), so there is no free slot to accept into.
-	if (external)
+	if (external && listener)
 	{
 		listener->Notify();
 	}
@@ -472,7 +478,8 @@ void Connection::Report()
 	// specifically after the state == free check, at which point is
 	// pre-empted by the ConnectionTask executing the same code, the allocated
 	// Connection will have been already spent.
-	xSemaphoreTake(allocateMutex, portMAX_DELAY);
+	if (!allocateMutex) { return nullptr; }
+	if (xSemaphoreTake(allocateMutex, pdMS_TO_TICKS(200)) != pdTRUE) { return nullptr; }
 	for (size_t i = 0; i < MaxConnections; ++i)
 	{
 		if (connectionList[i]->state == ConnState::free)
