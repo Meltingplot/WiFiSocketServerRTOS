@@ -16,7 +16,6 @@
 extern "C"
 {
 	#include "esp_task_wdt.h"
-	#include "lwip/stats.h"			// for stats_display()
 }
 
 
@@ -1849,8 +1848,6 @@ void ProcessRequest()
 
 		case NetworkCommand::diagnostics:
 			Connection::ReportConnections();
-			delay(20);										// give the Duet main processor time to digest that
-			stats_display();
 			break;
 
 		case NetworkCommand::networkSetClockControl:
