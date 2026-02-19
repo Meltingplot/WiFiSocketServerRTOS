@@ -196,7 +196,16 @@ void Connection::Poll()
 		if (!conn || !conn->pcb.tcp || !conn->pcb.tcp->unsent
 			|| millis() - closeTimer >= MaxSendWaitTime)
 		{
-			Close();		// re-enters at closePending case, does the actual close
+			// Unsent data drained (or timeout/PCB lost) — complete the close
+			if (conn)
+			{
+				netconn_set_sendtimeout(conn, 1);
+				netconn_close(conn);
+				netconn_delete(conn);
+				conn = nullptr;
+			}
+			FreePbuf();
+			SetState(ConnState::free);
 		}
 	}
 	else { }
@@ -224,7 +233,6 @@ void Connection::Close()
 		// fall through
 
 	case ConnState::otherEndClosed:					// the other end has already closed the connection
-	case ConnState::closePending:					// deferred close, called back from Poll()
 	default:										// should not happen
 		if (conn)
 		{
@@ -235,6 +243,9 @@ void Connection::Close()
 		}
 		FreePbuf();
 		SetState(ConnState::free);
+		break;
+
+	case ConnState::closePending:					// already pending, let Poll() handle it
 		break;
 	}
 }
