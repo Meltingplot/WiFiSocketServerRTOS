@@ -18,7 +18,7 @@ static_assert(MaxConnections < CONFIG_LWIP_MAX_SOCKETS); // Limits the listen ca
 // Public interface
 Connection::Connection(uint8_t num)
 	: number(num), localPort(0), remotePort(0), remoteIp(0), conn(nullptr), state(ConnState::free),
-	readBuf(nullptr), readIndex(0), alreadyRead(0), pendOtherEndClosed(false)
+	closeTimer(0), readBuf(nullptr), readIndex(0), alreadyRead(0), pendOtherEndClosed(false)
 {
 }
 
@@ -193,7 +193,11 @@ void Connection::Poll()
 	}
 	else if (state == ConnState::closePending)
 	{
-		Close();
+		if (!conn || !conn->pcb.tcp || !conn->pcb.tcp->unsent
+			|| millis() - closeTimer >= MaxSendWaitTime)
+		{
+			Close();		// re-enters at closePending case, does the actual close
+		}
 	}
 	else { }
 }
@@ -208,10 +212,16 @@ void Connection::Close()
 	switch(state)
 	{
 	case ConnState::connected:						// both ends are still connected
-		// Defer the actual netconn_close to the next Poll() cycle so we
-		// don't block inside the SPI transaction handler.
-		SetState(ConnState::closePending);
-		break;
+		if (conn && conn->pcb.tcp && conn->pcb.tcp->unsent)
+		{
+			// Data still queued for transmission — defer close to let
+			// lwIP finish sending before we tear down the connection.
+			closeTimer = millis();
+			SetState(ConnState::closePending);
+			break;
+		}
+		// No unsent data — safe to close inline (won't block)
+		// fall through
 
 	case ConnState::otherEndClosed:					// the other end has already closed the connection
 	case ConnState::closePending:					// deferred close, called back from Poll()
@@ -309,7 +319,7 @@ void Connection::Connected(Listener *listener, struct netconn* conn)
 	localPort = conn->pcb.tcp->local_port;
 	remotePort = conn->pcb.tcp->remote_port;
 	remoteIp = conn->pcb.tcp->remote_ip.u_addr.ip4.addr;
-	readIndex = alreadyRead = pendOtherEndClosed = 0;
+	readIndex = alreadyRead = closeTimer = pendOtherEndClosed = 0;
 
 	debugPrintf("conn %u: established %u.%u.%u.%u:%u -> :%u\n",
 		number, remoteIp & 0xFF, (remoteIp >> 8) & 0xFF,
