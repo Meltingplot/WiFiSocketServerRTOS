@@ -191,30 +191,6 @@ void Connection::Poll()
 			}
 		}
 	}
-	else if (state == ConnState::closePending)
-	{
-		const bool timeout = millis() - closeTimer >= MaxSendWaitTime;
-		if (!conn || !conn->pcb.tcp || !conn->pcb.tcp->unsent || timeout)
-		{
-			// Unsent data drained, PCB lost, or timeout — complete the close.
-			// Use a short sendtimeout: data is already on the wire, we just
-			// need one WiFi RTT for FIN/ACK. Don't use the default 2000ms
-			// as that blocks the main loop.
-			if (conn)
-			{
-				netconn_set_sendtimeout(conn, timeout ? 1 : 100);
-				netconn_close(conn);
-				netconn_delete(conn);
-				conn = nullptr;
-			}
-			FreePbuf();
-			SetState(ConnState::free);
-			if (listener)
-			{
-				listener->Notify();
-			}
-		}
-	}
 	else { }
 }
 
@@ -228,18 +204,14 @@ void Connection::Close()
 	switch(state)
 	{
 	case ConnState::connected:						// both ends are still connected
-		// Defer the actual close to Poll() so we don't block the SPI handler.
-		// Poll() will wait for unsent data to drain, then do the close.
-		closeTimer = millis();
-		SetState(ConnState::closePending);
-		break;
-
 	case ConnState::otherEndClosed:					// the other end has already closed the connection
 	default:										// should not happen
 		if (conn)
 		{
-			netconn_close(conn);
-			netconn_delete(conn);
+			// Free the slot immediately, close the netconn in the background.
+			// Use a generous timeout for connected state (slow WiFi needs time
+			// for data delivery + FIN/ACK), short timeout if other end closed.
+			EnqueueClose(conn, (state == ConnState::connected) ? MaxSendWaitTime : 100);
 			conn = nullptr;
 		}
 		FreePbuf();
@@ -248,9 +220,6 @@ void Connection::Close()
 		{
 			listener->Notify();
 		}
-		break;
-
-	case ConnState::closePending:					// already pending, let Poll() handle it
 		break;
 	}
 }
@@ -305,10 +274,7 @@ void Connection::Terminate(bool external)
 {
 	debugPrintf("conn %u: terminate external=%d state=%d\n", number, (int)external, (int)state);
 	if (conn) {
-		// No need to pass to ConnectionTask and do a graceful close on the connection.
-		// Delete it here.
-		netconn_close(conn);
-		netconn_delete(conn);
+		EnqueueClose(conn, 1);		// abort immediately in background
 		conn = nullptr;
 	}
 	FreePbuf();
@@ -405,6 +371,36 @@ void Connection::Report()
 	}
 }
 
+/*static*/ void Connection::InitCloseTask()
+{
+	closeQueue = xQueueCreate(MaxConnections, sizeof(CloseRequest));
+	xTaskCreate(CloseTask, "tcpClose", TCP_CLOSE_TASK_STACK, nullptr,
+				TCP_LISTENER_PRIO, &closeTaskHandle);
+}
+
+/*static*/ void Connection::CloseTask(void *param)
+{
+	CloseRequest req;
+	while (xQueueReceive(closeQueue, &req, portMAX_DELAY) == pdTRUE)
+	{
+		netconn_set_sendtimeout(req.conn, req.sendTimeout);
+		netconn_close(req.conn);
+		netconn_delete(req.conn);
+	}
+}
+
+/*static*/ void Connection::EnqueueClose(struct netconn *c, uint32_t sendTimeout)
+{
+	CloseRequest req = { c, sendTimeout };
+	if (closeQueue == nullptr || xQueueSend(closeQueue, &req, 0) != pdTRUE)
+	{
+		// Fallback: queue unavailable or full — close directly (blocks caller)
+		netconn_set_sendtimeout(c, sendTimeout);
+		netconn_close(c);
+		netconn_delete(c);
+	}
+}
+
 /*static*/ void Connection::PollAll()
 {
 	for (size_t i = 0; i < MaxConnections; ++i)
@@ -484,7 +480,7 @@ void Connection::Report()
 		if (connectionList[i]->localPort == port)
 		{
 			const ConnState state = connectionList[i]->state;
-			if (state == ConnState::connected || state == ConnState::otherEndClosed || state == ConnState::closePending)
+			if (state == ConnState::connected || state == ConnState::otherEndClosed)
 			{
 				++count;
 			}
@@ -518,5 +514,7 @@ void Connection::Report()
 // Static data
 SemaphoreHandle_t Connection::allocateMutex = nullptr;
 Connection *Connection::connectionList[MaxConnections];
+QueueHandle_t Connection::closeQueue = nullptr;
+TaskHandle_t Connection::closeTaskHandle = nullptr;
 
 // End

@@ -1953,6 +1953,7 @@ void setup()
 
 	// Setup networking
 	Connection::Init();
+	Connection::InitCloseTask();
 	Listener::Init();
 
 	lastError = nullptr;
