@@ -133,7 +133,7 @@ size_t Connection::Write(const uint8_t *data, size_t length, bool doPush, bool c
 		Close();
 	}
 
-	return length;
+	return total;
 }
 
 size_t Connection::CanWrite() const
