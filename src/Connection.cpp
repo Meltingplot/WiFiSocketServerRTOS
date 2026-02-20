@@ -289,7 +289,7 @@ bool Connection::Connect(uint8_t protocol, uint32_t remoteIp, uint16_t remotePor
 		debugPrintAlways("can't allocate connection\n");
 	}
 
-	return true;
+	return false;
 }
 
 void Connection::Terminate(bool external)
