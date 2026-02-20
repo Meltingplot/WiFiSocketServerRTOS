@@ -226,7 +226,7 @@ void Connection::Poll()
 		else if (timeout)
 		{
 			// Drain timeout — force close.
-			debugPrintfAlways("conn %u: close, drain TIMEOUT %lums unsent=%p unacked=%p draining=%d\n",
+			debugPrintf("conn %u: close, drain TIMEOUT %lums unsent=%p unacked=%p draining=%d\n",
 				number, (unsigned long)elapsed,
 				conn->pcb.tcp->unsent, conn->pcb.tcp->unacked, drainingSlots);
 			StopDraining();
@@ -255,7 +255,7 @@ void Connection::Poll()
 			else if (!isDraining)
 			{
 				// Over budget — fast-close, let client retry.
-				debugPrintfAlways("conn %u: close, OVER BUDGET fast-close, budget=%d draining=%d unacked=%p\n",
+				debugPrintf("conn %u: close, OVER BUDGET fast-close, budget=%d draining=%d unacked=%p\n",
 					number, budget, drainingSlots, conn->pcb.tcp->unacked);
 				netconn_set_sendtimeout(conn, 100);
 				netconn_close(conn);
