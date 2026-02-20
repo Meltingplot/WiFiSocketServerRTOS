@@ -23,7 +23,7 @@
 #include "Listener.h"
 
 constexpr uint32_t MaxReadWriteTime = 2000;		// how long we wait for a write operation to complete before it is cancelled
-constexpr uint32_t MaxSendWaitTime = 2000;		// how long we wait for unsent data to drain before aborting
+constexpr uint32_t MaxSendWaitTime = 2000;		// how long we wait for unsent/unacked data to drain before aborting
 
 class Connection
 {

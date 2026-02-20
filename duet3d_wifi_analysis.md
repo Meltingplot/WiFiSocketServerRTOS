@@ -6,7 +6,7 @@ Investigation of connection instability in the Duet3D WiFiSocketServerRTOS firmw
 
 An intermediate approach of removing closePending entirely (closing connections immediately) was tested. It worked on fast WiFi but blocked the SPI main loop for up to 2 seconds per close on slow WiFi, freezing all communication with the SAM processor.
 
-The final fix keeps closePending but corrects its bugs: waits for unsent data instead of unacked, removes the blocking netconn_shutdown, uses a short sendtimeout, and adds null safety. Combined with ERR_MEM resilience and several pre-existing bug fixes in the original code.
+The final fix keeps closePending but corrects its bugs: waits for both unsent and unacked data to drain (rather than the original unacked-only check), removes the blocking netconn_shutdown, uses a short sendtimeout, and adds null safety. Combined with ERR_MEM resilience and several pre-existing bug fixes in the original code.
 
 ---
 
@@ -34,7 +34,7 @@ T=~57ms  lwIP receives RST → frees PCB
 
 The ACK is never sent because the client's RST preempts it. closePending held a PCB and connection slot waiting for nothing. Under DWC churn (~12 conn/s) with lwIP's pool of ~10 PCBs, this exhausted the pool. lwIP's `tcp_kill_prio()` then killed the oldest connection — the file upload.
 
-**Unsent vs unacked**: Unsent data is queued but not yet handed to the IP layer. It drains in one `tcp_output()` call (microseconds on fast WiFi, one WiFi RTT on slow). Waiting for unsent is the correct threshold — once data reaches the IP layer, lwIP handles retransmission internally regardless of whether we hold the PCB.
+**Unsent vs unacked**: Unsent data is queued but not yet handed to the IP layer. Unacked data has been transmitted but not yet acknowledged by the remote end. The code now waits for both queues to drain before closing. While lwIP does retain the TCP PCB after `netconn_delete()` and can continue retransmitting, if `netconn_close()` times out the resulting RST would abandon any unacked segments. Waiting for the unacked queue to empty as well eliminates this window.
 
 ### Bug 2: netconn_shutdown() Blocking in Close()
 
@@ -98,19 +98,15 @@ else if (state == ConnState::closePending)
 - **1ms on timeout** — abort path, don't wait at all
 - **Direct free + Notify** — slot available immediately, listener wakes to drain backlog
 
-### Data Safety: Why Freeing the Slot Before Unacked Drains Is Safe
+### Data Safety: Waiting for Both Unsent and Unacked
 
-Freeing the connection slot while lwIP still has unacked data does not cause data corruption. When `Write()` calls `netconn_write_partly()`, the data is **copied** into lwIP-owned pbufs (the `NETCONN_COPY` flag is set, and `LWIP_NETIF_TX_SINGLE_PBUF` forces a copy). The TCP PCB owns its own independent send buffer chain — the connection slot holds no send data.
+The code now waits for both `unsent` and `unacked` queues to drain before proceeding with the close. This ensures all data has been acknowledged by the remote end before we call `netconn_close()`.
 
-When we free the slot:
-1. `netconn_close(conn)` sends FIN — PCB transitions to FIN_WAIT states
-2. `netconn_delete(conn)` frees the netconn struct, but the TCP PCB continues to live in lwIP's internal lists
-3. We set `conn = nullptr`, free receive buffers, mark slot `free`
-4. lwIP continues retransmitting unacked data from its own pbufs, completely independently
+In the normal case, `netconn_close()` sends FIN and `netconn_delete()` frees the netconn struct while the TCP PCB continues to live in lwIP's internal lists for the TIME_WAIT period. Since both queues are empty at this point, there is no data at risk.
 
-When RRF reuses the slot for a new connection, it gets a brand new `netconn` with a brand new TCP PCB. The old PCB's retransmission buffers are entirely separate — no shared memory.
+On timeout (2 seconds), we proceed regardless — at that point the connection is likely dead and the short sendtimeout (1ms) on `netconn_close()` ensures we don't block. Any remaining unacked data is abandoned, but we've already waited the maximum reasonable time.
 
-If `netconn_close()` times out (100ms) and `netconn_delete()` sends RST instead, the unacked data is abandoned — but it was already transmitted (unsent was empty), and the RST tells the client the connection is gone.
+When `Write()` calls `netconn_write_partly()`, data is **copied** into lwIP-owned pbufs (the `NETCONN_COPY` flag is set, and `LWIP_NETIF_TX_SINGLE_PBUF` forces a copy). When RRF reuses the slot for a new connection, it gets a brand new `netconn` with a brand new TCP PCB — no shared memory with any old PCB.
 
 ---
 

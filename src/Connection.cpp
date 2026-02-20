@@ -193,9 +193,9 @@ void Connection::Poll()
 	else if (state == ConnState::closePending)
 	{
 		const bool timeout = millis() - closeTimer >= MaxSendWaitTime;
-		if (!conn || !conn->pcb.tcp || !conn->pcb.tcp->unsent || timeout)
+		if (!conn || !conn->pcb.tcp || (!conn->pcb.tcp->unsent && !conn->pcb.tcp->unacked) || timeout)
 		{
-			// Unsent data drained, PCB lost, or timeout — complete the close.
+			// Unsent and unacked data drained, PCB lost, or timeout — complete the close.
 			// Use a short sendtimeout so netconn_close doesn't block the main loop.
 			if (conn)
 			{
@@ -225,7 +225,7 @@ void Connection::Close()
 	{
 	case ConnState::connected:						// both ends are still connected
 		// Defer the actual close to Poll() so we don't block the SPI handler.
-		// Poll() will wait for unsent data to drain, then do the close.
+		// Poll() will wait for unsent and unacked data to drain, then do the close.
 		closeTimer = millis();
 		SetState(ConnState::closePending);
 		break;
