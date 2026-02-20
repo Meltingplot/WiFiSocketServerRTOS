@@ -361,7 +361,8 @@ void Connection::Report()
 
 		"aborted",				// an error has occurred
 		"closePending",			// close this socket when sending is complete
-		"closeReady"			// about to be closed
+		"closeReady",			// about to be closed
+		"allocated"				// allocated but not yet connected
 	};
 
 	const unsigned int st = (int)state;
