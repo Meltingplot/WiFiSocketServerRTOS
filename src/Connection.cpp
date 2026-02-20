@@ -107,8 +107,11 @@ size_t Connection::Write(const uint8_t *data, size_t length, bool doPush, bool c
 		written = 0;
 		rc = netconn_write_partly(conn, data + total, length - total, flag, &written);
 
-		if (rc != ERR_OK && rc != ERR_WOULDBLOCK) {
+		if (rc != ERR_OK && rc != ERR_WOULDBLOCK && rc != ERR_MEM) {
 			break;
+		}
+		if ((rc == ERR_WOULDBLOCK || rc == ERR_MEM) && written == 0) {
+			break;		// send buffer full and no progress after timeout, avoid spinning
 		}
 	}
 
@@ -118,7 +121,7 @@ size_t Connection::Write(const uint8_t *data, size_t length, bool doPush, bool c
 		{
 			SetState(ConnState::otherEndClosed);
 		}
-		else
+		else if (rc != ERR_WOULDBLOCK && rc != ERR_MEM)
 		{
 			// We failed to write the data. See above for possible mitigations. For now we just terminate the connection.
 			debugPrintfAlways("Write fail len=%u err=%d\n", total, (int)rc);
