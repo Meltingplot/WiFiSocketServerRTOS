@@ -114,7 +114,7 @@ size_t Connection::Write(const uint8_t *data, size_t length, bool doPush, bool c
 
 	if (rc != ERR_OK)
 	{
-		if (rc == ERR_RST || rc == ERR_CLSD)
+		if (rc == ERR_RST || rc == ERR_CLSD || rc == ERR_ABRT || rc == ERR_CONN)
 		{
 			SetState(ConnState::otherEndClosed);
 		}
@@ -162,9 +162,9 @@ void Connection::Poll()
 			rc = netconn_recv_tcp_pbuf_flags(conn, &data, NETCONN_NOAUTORCVD);
 		}
 
-		if (rc != ERR_WOULDBLOCK)
+		if (rc != ERR_WOULDBLOCK && rc != ERR_TIMEOUT)
 		{
-			if (rc == ERR_RST || rc == ERR_CLSD || rc == ERR_CONN)
+			if (rc == ERR_RST || rc == ERR_CLSD || rc == ERR_CONN || rc == ERR_ABRT)
 			{
 				// Pend setting the state to other end closed if there is data to be read.
 				// Otherwise, set it immediately. This is to avoid a case when a socket in RRF
