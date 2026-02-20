@@ -243,6 +243,12 @@ void Connection::Close()
 				number, hasUnsent, hasUnacked,
 				(conn && conn->pcb.tcp) ? (unsigned)conn->pcb.tcp->snd_queuelen : 0);
 		}
+		// Lower priority so lwIP reclaims closePending PCBs first,
+		// protecting active connections (e.g. uploads) from tcp_kill_prio().
+		if (conn && conn->pcb.tcp)
+		{
+			tcp_setprio(conn->pcb.tcp, TCP_PRIO_MIN);
+		}
 		SetState(ConnState::closePending);
 		break;
 
