@@ -169,6 +169,8 @@ void Connection::Poll()
 		{
 			if (rc == ERR_RST || rc == ERR_CLSD || rc == ERR_CONN || rc == ERR_ABRT)
 			{
+				debugPrintf("conn %u: recv err=%d, %s\n",
+					number, (int)rc, readBuf ? "pendOEC" : "otherEndClosed");
 				// Pend setting the state to other end closed if there is data to be read.
 				// Otherwise, set it immediately. This is to avoid a case when a socket in RRF
 				// gets stuck in the peer disconnecting state, when it recieves the change of
@@ -192,9 +194,14 @@ void Connection::Poll()
 	}
 	else if (state == ConnState::closePending)
 	{
-		const bool timeout = millis() - closeTimer >= MaxSendWaitTime;
+		const uint32_t elapsed = millis() - closeTimer;
+		const bool timeout = elapsed >= MaxSendWaitTime;
 		if (!conn || !conn->pcb.tcp || !conn->pcb.tcp->unsent || timeout)
 		{
+			debugPrintf("conn %u: closePending done, %s after %lums\n",
+				number,
+				!conn ? "no conn" : !conn->pcb.tcp ? "no pcb" : timeout ? "timeout" : "unsent drained",
+				(unsigned long)elapsed);
 			// Unsent data drained, PCB lost, or timeout — complete the close.
 			// Use a short sendtimeout so netconn_close doesn't block the main loop.
 			if (conn)
@@ -227,11 +234,13 @@ void Connection::Close()
 		// Defer the actual close to Poll() so we don't block the SPI handler.
 		// Poll() will wait for unsent data to drain, then do the close.
 		closeTimer = millis();
+		debugPrintf("conn %u: Close() -> closePending\n", number);
 		SetState(ConnState::closePending);
 		break;
 
 	case ConnState::otherEndClosed:					// the other end has already closed the connection
 	default:										// should not happen
+		debugPrintf("conn %u: Close() from state=%d -> free\n", number, (int)state);
 		if (conn)
 		{
 			netconn_set_sendtimeout(conn, 1);		// other end is gone, don't block
@@ -300,6 +309,8 @@ bool Connection::Connect(uint8_t protocol, uint32_t remoteIp, uint16_t remotePor
 
 void Connection::Terminate(bool external)
 {
+	debugPrintf("conn %u: Terminate(%s) state=%d\n",
+		number, external ? "ext" : "int", (int)state);
 	if (conn) {
 		// No need to pass to ConnectionTask and do a graceful close on the connection.
 		// Delete it here.
