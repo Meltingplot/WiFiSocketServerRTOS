@@ -187,23 +187,29 @@ void Connection::Poll()
 			}
 		}
 	}
-	else if (state == ConnState::closeReady)
-	{
-		// Deferred close, possibly outside the ISR
-		Close();
-	}
 	else if (state == ConnState::closePending)
 	{
-		// We're about to close this connection and we're still waiting for the remaining data to be acknowledged
-		if (conn->pcb.tcp && !conn->pcb.tcp->unacked)
+		const uint32_t elapsed = millis() - closeTimer;
+		const bool timeout = elapsed >= MaxSendWaitTime;
+		if (!conn || !conn->pcb.tcp
+			|| (!conn->pcb.tcp->unsent && !conn->pcb.tcp->unacked)
+			|| timeout)
 		{
-			// All data has been received, close this connection next time
-			SetState(ConnState::closeReady);
-		}
-		else if (millis() - closeTimer >= MaxAckTime)
-		{
-			// The acknowledgement timer has expired, abort this connection
-			Terminate(false);
+			// Both queues drained, PCB lost, or timeout — complete the close.
+			// Use a short sendtimeout so netconn_close doesn't block the main loop.
+			if (conn)
+			{
+				netconn_set_sendtimeout(conn, timeout ? 1 : 100);
+				netconn_close(conn);
+				netconn_delete(conn);
+				conn = nullptr;
+			}
+			FreePbuf();
+			SetState(ConnState::free);
+			if (listener)
+			{
+				listener->Notify();
+			}
 		}
 	}
 	else { }
@@ -218,30 +224,30 @@ void Connection::Close()
 	switch(state)
 	{
 	case ConnState::connected:						// both ends are still connected
-		if (conn->pcb.tcp && conn->pcb.tcp->unacked)
-		{
-			closeTimer = millis();
-			netconn_shutdown(conn, true, false);	// shut down recieve
-			SetState(ConnState::closePending);		// wait for the remaining data to be sent before closing
-			break;
-		}
-		// fallthrough
+		// Defer the actual close to Poll() so we don't block the SPI handler.
+		// Poll() will wait for unsent and unacked data to drain, then do the close.
+		closeTimer = millis();
+		SetState(ConnState::closePending);
+		break;
+
 	case ConnState::otherEndClosed:					// the other end has already closed the connection
-	case ConnState::closeReady:						// the other end has closed and we were already closePending
 	default:										// should not happen
 		if (conn)
 		{
+			netconn_set_sendtimeout(conn, 1);		// other end is gone, don't block
 			netconn_close(conn);
 			netconn_delete(conn);
 			conn = nullptr;
 		}
 		FreePbuf();
 		SetState(ConnState::free);
-		listener->Notify();
+		if (listener)
+		{
+			listener->Notify();
+		}
 		break;
 
-	case ConnState::closePending:					// we already asked to close
-		// Should not happen, but if it does just let the close proceed when sending is complete or timeout
+	case ConnState::closePending:					// already pending, let Poll() handle it
 		break;
 	}
 }
