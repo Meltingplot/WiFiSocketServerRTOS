@@ -303,7 +303,10 @@ void Connection::Terminate(bool external)
 	}
 	FreePbuf();
 	SetState((external) ? ConnState::free : ConnState::aborted);
-	listener->Notify();
+	if (external && listener)
+	{
+		listener->Notify();
+	}
 }
 
 void Connection::Accept(Listener *listener, struct netconn* conn, uint8_t protocol)
