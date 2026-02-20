@@ -221,6 +221,9 @@ void Connection::Close()
 		if (conn->pcb.tcp && conn->pcb.tcp->unacked)
 		{
 			closeTimer = millis();
+			// Lower priority so lwIP reclaims closePending PCBs first,
+			// protecting active connections (e.g. uploads) from tcp_kill_prio().
+			tcp_setprio(conn->pcb.tcp, TCP_PRIO_MIN);
 			netconn_shutdown(conn, true, false);	// shut down recieve
 			SetState(ConnState::closePending);		// wait for the remaining data to be sent before closing
 			break;
