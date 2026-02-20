@@ -196,13 +196,15 @@ void Connection::Poll()
 	{
 		const uint32_t elapsed = millis() - closeTimer;
 		const bool timeout = elapsed >= MaxSendWaitTime;
-		if (!conn || !conn->pcb.tcp || !conn->pcb.tcp->unsent || timeout)
+		if (!conn || !conn->pcb.tcp
+			|| (!conn->pcb.tcp->unsent && !conn->pcb.tcp->unacked)
+			|| timeout)
 		{
-			debugPrintf("conn %u: closePending done, %s after %lums\n",
+			debugPrintf("conn %u: closePending done, %s after %ums\n",
 				number,
-				!conn ? "no conn" : !conn->pcb.tcp ? "no pcb" : timeout ? "timeout" : "unsent drained",
-				(unsigned long)elapsed);
-			// Unsent data drained, PCB lost, or timeout — complete the close.
+				!conn ? "no conn" : !conn->pcb.tcp ? "no pcb" : timeout ? "timeout" : "drained",
+				(unsigned)elapsed);
+			// Both queues drained, PCB lost, or timeout — complete the close.
 			// Use a short sendtimeout so netconn_close doesn't block the main loop.
 			if (conn)
 			{
@@ -232,9 +234,15 @@ void Connection::Close()
 	{
 	case ConnState::connected:						// both ends are still connected
 		// Defer the actual close to Poll() so we don't block the SPI handler.
-		// Poll() will wait for unsent data to drain, then do the close.
+		// Poll() will wait for unsent and unacked data to drain, then do the close.
 		closeTimer = millis();
-		debugPrintf("conn %u: Close() -> closePending\n", number);
+		{
+			const bool hasUnsent = conn && conn->pcb.tcp && conn->pcb.tcp->unsent;
+			const bool hasUnacked = conn && conn->pcb.tcp && conn->pcb.tcp->unacked;
+			debugPrintf("conn %u: Close() -> closePending unsent=%d unacked=%d qlen=%u\n",
+				number, hasUnsent, hasUnacked,
+				(conn && conn->pcb.tcp) ? (unsigned)conn->pcb.tcp->snd_queuelen : 0);
+		}
 		SetState(ConnState::closePending);
 		break;
 
