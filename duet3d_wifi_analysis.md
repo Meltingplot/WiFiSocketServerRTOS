@@ -73,7 +73,7 @@ No netconn_shutdown, no netconn_close, no blocking. Just set a timer and defer t
 else if (state == ConnState::closePending)
 {
     const bool timeout = millis() - closeTimer >= MaxSendWaitTime;  // 2s
-    if (!conn || !conn->pcb.tcp || !conn->pcb.tcp->unsent || timeout)
+    if (!conn || !conn->pcb.tcp || (!conn->pcb.tcp->unsent && !conn->pcb.tcp->unacked) || timeout)
     {
         if (conn)
         {
@@ -92,8 +92,8 @@ else if (state == ConnState::closePending)
 }
 ```
 
-- **Null guards** — handles PCB freed by lwIP (RST/timeout during wait)
-- **Unsent check** — frees slot as soon as data reaches IP layer
+- **Null guards** — handles PCB freed by lwIP (RST/timeout during wait). This is the key to avoiding the original churn problem: when a DWC client sends RST, lwIP frees the PCB immediately, `!conn->pcb.tcp` becomes true, and the slot is freed within milliseconds — we never wait for unacked on a dead connection.
+- **Unsent + unacked check** — frees slot only once all data has been acknowledged, preventing data loss if netconn_close() times out and triggers RST
 - **100ms sendtimeout** — enough for FIN/ACK, won't block the main loop long
 - **1ms on timeout** — abort path, don't wait at all
 - **Direct free + Notify** — slot available immediately, listener wakes to drain backlog
