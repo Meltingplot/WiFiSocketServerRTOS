@@ -18,7 +18,8 @@ static_assert(MaxConnections < CONFIG_LWIP_MAX_SOCKETS); // Limits the listen ca
 // Public interface
 Connection::Connection(uint8_t num)
 	: number(num), localPort(0), remotePort(0), remoteIp(0), conn(nullptr), state(ConnState::free),
-	closeTimer(0),readBuf(nullptr), readIndex(0), alreadyRead(0), pendOtherEndClosed(false)
+	closeTimer(0), drainStartTime(0), isDraining(false),
+	readBuf(nullptr), readIndex(0), alreadyRead(0), pendOtherEndClosed(false)
 {
 }
 
@@ -192,25 +193,81 @@ void Connection::Poll()
 	}
 	else if (state == ConnState::closePending)
 	{
-		const bool timeout = millis() - closeTimer >= MaxSendWaitTime;
-		if (!conn || !conn->pcb.tcp || (!conn->pcb.tcp->unsent && !conn->pcb.tcp->unacked) || timeout)
+		const uint32_t elapsed = millis() - closeTimer;
+		const bool timeout = elapsed >= MaxSendWaitTime;
+
+		if (!conn || !conn->pcb.tcp)
 		{
-			// Unsent and unacked data drained, PCB lost, or timeout — complete the close.
-			// Use a short sendtimeout so netconn_close doesn't block the main loop.
+			// PCB already gone (RST received or connection lost) — close immediately.
+			debugPrintf("conn %u: close, pcb null (RST?) after %lums\n", number, (unsigned long)elapsed);
+			StopDraining();
 			if (conn)
 			{
-				netconn_set_sendtimeout(conn, timeout ? 1 : 100);
-				netconn_close(conn);
 				netconn_delete(conn);
 				conn = nullptr;
 			}
 			FreePbuf();
 			SetState(ConnState::free);
-			if (listener)
-			{
-				listener->Notify();
-			}
+			if (listener) { listener->Notify(); }
 		}
+		else if (!conn->pcb.tcp->unsent && !conn->pcb.tcp->unacked)
+		{
+			// All data sent and acknowledged — clean graceful close.
+			debugPrintf("conn %u: close, fully drained after %lums\n", number, (unsigned long)elapsed);
+			StopDraining();
+			netconn_set_sendtimeout(conn, 100);
+			netconn_close(conn);
+			netconn_delete(conn);
+			conn = nullptr;
+			FreePbuf();
+			SetState(ConnState::free);
+			if (listener) { listener->Notify(); }
+		}
+		else if (timeout)
+		{
+			// Drain timeout — force close.
+			debugPrintfAlways("conn %u: close, drain TIMEOUT %lums unsent=%p unacked=%p draining=%d\n",
+				number, (unsigned long)elapsed,
+				conn->pcb.tcp->unsent, conn->pcb.tcp->unacked, drainingSlots);
+			StopDraining();
+			netconn_set_sendtimeout(conn, 1);
+			netconn_close(conn);
+			netconn_delete(conn);
+			conn = nullptr;
+			FreePbuf();
+			SetState(ConnState::free);
+			if (listener) { listener->Notify(); }
+		}
+		else if (!conn->pcb.tcp->unsent)
+		{
+			// unsent is empty, but unacked has data — decide whether to wait or fast-close.
+			const int budget = GetDrainBudget();
+
+			if (!isDraining && drainingSlots < budget)
+			{
+				// Budget available — enter unacked drain wait.
+				isDraining = true;
+				drainStartTime = millis();
+				drainingSlots++;
+				debugPrintf("conn %u: drain START, waiting for unacked, budget=%d/%d draining=%d\n",
+					number, budget, (int)MaxDrainBudget, drainingSlots);
+			}
+			else if (!isDraining)
+			{
+				// Over budget — fast-close, let client retry.
+				debugPrintfAlways("conn %u: close, OVER BUDGET fast-close, budget=%d draining=%d unacked=%p\n",
+					number, budget, drainingSlots, conn->pcb.tcp->unacked);
+				netconn_set_sendtimeout(conn, 100);
+				netconn_close(conn);
+				netconn_delete(conn);
+				conn = nullptr;
+				FreePbuf();
+				SetState(ConnState::free);
+				if (listener) { listener->Notify(); }
+			}
+			// else: already draining, keep waiting — timeout or ACK will resolve it
+		}
+		// else: unsent still has data, keep waiting for it to be transmitted
 	}
 	else { }
 }
@@ -227,6 +284,11 @@ void Connection::Close()
 		// Defer the actual close to Poll() so we don't block the SPI handler.
 		// Poll() will wait for unsent and unacked data to drain, then do the close.
 		closeTimer = millis();
+		isDraining = false;
+		debugPrintf("conn %u: closePending, unsent=%p unacked=%p\n",
+			number,
+			(conn && conn->pcb.tcp) ? (void*)conn->pcb.tcp->unsent : nullptr,
+			(conn && conn->pcb.tcp) ? (void*)conn->pcb.tcp->unacked : nullptr);
 		SetState(ConnState::closePending);
 		break;
 
@@ -300,6 +362,7 @@ bool Connection::Connect(uint8_t protocol, uint32_t remoteIp, uint16_t remotePor
 
 void Connection::Terminate(bool external)
 {
+	StopDraining();
 	if (conn) {
 		// No need to pass to ConnectionTask and do a graceful close on the connection.
 		// Delete it here.
@@ -329,6 +392,7 @@ void Connection::Connected(Listener *listener, struct netconn* conn)
 	remotePort = conn->pcb.tcp->remote_port;
 	remoteIp = conn->pcb.tcp->remote_ip.u_addr.ip4.addr;
 	readIndex = alreadyRead = closeTimer = pendOtherEndClosed = 0;
+	isDraining = false;
 
 	// This function is used in lower priority tasks than the main task.
 	// Mark the connection ready last, so the main task does not use it when it's not ready.
@@ -413,7 +477,7 @@ void Connection::Report()
 
 /*static*/ void Connection::ReportConnections()
 {
-	ets_printf("Conns");
+	ets_printf("Conns (draining=%d budget=%d)", drainingSlots, GetDrainBudget());
 	for (size_t i = 0; i < MaxConnections; ++i)
 	{
 		ets_printf("%c %u:", (i == 0) ? ':' : ',', i);
@@ -507,5 +571,34 @@ void Connection::Report()
 // Static data
 SemaphoreHandle_t Connection::allocateMutex = nullptr;
 Connection *Connection::connectionList[MaxConnections];
+int Connection::drainingSlots = 0;
+
+/*static*/ int Connection::GetDrainBudget()
+{
+	// Count free slots (not active, not draining, not allocated)
+	int freeSlots = 0;
+	for (size_t i = 0; i < MaxConnections; ++i)
+	{
+		if (connectionList[i]->state == ConnState::free)
+		{
+			++freeSlots;
+		}
+	}
+	// Allow more drain slots when free slots are plentiful, clamp to [Min..Max]
+	const int budget = std::clamp(freeSlots + drainingSlots - 2, MinDrainBudget, MaxDrainBudget);
+	return budget;
+}
+
+void Connection::StopDraining()
+{
+	if (isDraining)
+	{
+		const uint32_t drainDuration = millis() - drainStartTime;
+		debugPrintf("conn %u: drain STOP after %lums, draining=%d->%d\n",
+			number, (unsigned long)drainDuration, drainingSlots, drainingSlots - 1);
+		drainingSlots--;
+		isDraining = false;
+	}
+}
 
 // End

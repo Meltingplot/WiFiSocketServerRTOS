@@ -24,6 +24,8 @@
 
 constexpr uint32_t MaxReadWriteTime = 2000;		// how long we wait for a write operation to complete before it is cancelled
 constexpr uint32_t MaxSendWaitTime = 2000;		// how long we wait for unsent/unacked data to drain before aborting
+constexpr int MinDrainBudget = 2;				// always allow at least this many slots to wait for unacked drain
+constexpr int MaxDrainBudget = 6;				// allow up to this many when slots are plentiful
 
 class Connection
 {
@@ -72,6 +74,8 @@ private:
 	volatile ConnState state;
 
 	uint32_t closeTimer;
+	uint32_t drainStartTime;	// when this connection entered unacked drain
+	bool isDraining;			// true if this connection is counted in drainingSlots
 
 	struct pbuf *readBuf;		// the buffers holding data we have received that has not yet been taken
 	size_t readIndex;			// how much data we have already read from the current pbuf
@@ -86,6 +90,10 @@ private:
 
 	static SemaphoreHandle_t allocateMutex;
 	static Connection *connectionList[MaxConnections];
+	static int drainingSlots;		// how many connections are currently waiting for unacked drain
+
+	static int GetDrainBudget();	// how many slots may wait for unacked drain right now
+	void StopDraining();			// decrement drainingSlots if this connection was draining
 
 	void FreePbuf();
 	void Report();
