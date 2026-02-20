@@ -244,12 +244,26 @@ void Listener::Notify()
 					}
 					else
 					{
-						debugPrintfAlways("pend connection on port %u no free conn\n", listener->port);
+						// No free connection slots. Drain from backlog to free lwIP resources.
+						struct netconn *newConn;
+						if (netconn_accept(listener->conn, &newConn) == ERR_OK)
+						{
+							netconn_close(newConn);
+							netconn_delete(newConn);
+						}
+						debugPrintfAlways("rejected connection on port %u no free conn\n", listener->port);
 					}
 				}
 				else
 				{
-					debugPrintfAlways("pend connection on port %u already %u conns\n", listener->port, numConns);
+					// Too many connections on this port. Drain from backlog to free lwIP resources.
+					struct netconn *newConn;
+					if (netconn_accept(listener->conn, &newConn) == ERR_OK)
+					{
+						netconn_close(newConn);
+						netconn_delete(newConn);
+					}
+					debugPrintfAlways("rejected connection on port %u already %u conns\n", listener->port, numConns);
 				}
 			}
 		}
