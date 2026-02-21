@@ -84,6 +84,8 @@ private:
 	void Connected(Listener *listener, struct netconn *conn);
 	ConnState GetState() const { return state; }
 
+	static bool HasFreeSlot();
+
 	static SemaphoreHandle_t allocateMutex;
 	static Connection *connectionList[MaxConnections];
 

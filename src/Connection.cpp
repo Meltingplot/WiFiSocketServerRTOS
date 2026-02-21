@@ -196,13 +196,18 @@ void Connection::Poll()
 	{
 		const uint32_t elapsed = millis() - closeTimer;
 		const bool timeout = elapsed >= MaxSendWaitTime;
+		// Hybrid close strategy: always wait for unsent to drain (data on wire).
+		// Only wait for unacked (remote ACK) when free slots are available.
+		// Under slot pressure, skip the ACK wait to free slots quickly.
+		const bool skipAckWait = !HasFreeSlot();
 		if (!conn || !conn->pcb.tcp
-			|| (!conn->pcb.tcp->unsent && !conn->pcb.tcp->unacked)
+			|| (!conn->pcb.tcp->unsent && (!conn->pcb.tcp->unacked || skipAckWait))
 			|| timeout)
 		{
 			debugPrintf("conn %u: closePending done, %s after %ums\n",
 				number,
-				!conn ? "no conn" : !conn->pcb.tcp ? "no pcb" : timeout ? "timeout" : "drained",
+				!conn ? "no conn" : !conn->pcb.tcp ? "no pcb" : timeout ? "timeout"
+				: conn->pcb.tcp->unacked ? "unsent done, skip ack" : "drained",
 				(unsigned)elapsed);
 			// Both queues drained, PCB lost, or timeout — complete the close.
 			// Use a short sendtimeout so netconn_close doesn't block the main loop.
@@ -355,6 +360,12 @@ void Connection::Connected(Listener *listener, struct netconn* conn)
 	remoteIp = conn->pcb.tcp->remote_ip.u_addr.ip4.addr;
 	readIndex = alreadyRead = closeTimer = pendOtherEndClosed = 0;
 
+	// Protect active connections from tcp_kill_prio(). When the PCB pool
+	// is exhausted, lwIP will only kill PCBs with lower priority. Combined
+	// with tcp_setprio(TCP_PRIO_MIN) in Close(), this ensures only
+	// closePending PCBs get reclaimed, never active connections (e.g. uploads).
+	tcp_setprio(conn->pcb.tcp, TCP_PRIO_MAX);
+
 	// This function is used in lower priority tasks than the main task.
 	// Mark the connection ready last, so the main task does not use it when it's not ready.
 	// This should also be free from being taken by Connection::Allocate, since the previous
@@ -488,6 +499,18 @@ void Connection::Report()
 	}
 	xSemaphoreGive(allocateMutex);
 	return conn;
+}
+
+/*static*/ bool Connection::HasFreeSlot()
+{
+	for (size_t i = 0; i < MaxConnections; ++i)
+	{
+		if (connectionList[i]->state == ConnState::free)
+		{
+			return true;
+		}
+	}
+	return false;
 }
 
 /*static*/ uint16_t Connection::CountConnectionsOnPort(uint16_t port)
