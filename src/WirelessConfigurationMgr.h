@@ -44,11 +44,11 @@ public:
 private:
 	static WirelessConfigurationMgr* instance;
 
-	static constexpr char KVS_PATH[] = "/kvs";
-	static constexpr char SSIDS_DIR[] = "ssids";
+	static inline constexpr char KVS_PATH[] = "/kvs";
+	static inline constexpr char SSIDS_DIR[] = "ssids";
 
-	static constexpr char SCRATCH_DIR[] = "scratch";
-	static constexpr char CREDS_DIR[] = "creds";
+	static inline constexpr char SCRATCH_DIR[] = "scratch";
+	static inline constexpr char CREDS_DIR[] = "creds";
 
 	static constexpr int SCRATCH_OFFSET_ID = 0;
 	static constexpr int LOADED_SSID_ID = 1;
