@@ -127,13 +127,14 @@ bool Listener::Start(uint16_t port, uint32_t ip, int protocol, int maxConns)
 
 void Listener::Stop()
 {
-	netconn_close(conn);
-	netconn_delete(conn);
+	struct netconn *savedConn = conn;
+	netconn_close(savedConn);
+	netconn_delete(savedConn);
 
 	for (int i = 0; i < MaxConnections; i++)
 	{
 		Listener *listener = listeners[i];
-		if (listener && listener->conn == conn)
+		if (listener && listener->conn == savedConn)
 		{
 			delete listener;
 			listeners[i] = nullptr;
