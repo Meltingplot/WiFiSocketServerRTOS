@@ -1,5 +1,3 @@
-set(CMAKE_CXX_STANDARD 17)
-
 set(srcs "Misc.cpp"
          "Listener.cpp"
          "SocketServer.cpp"
@@ -20,6 +18,8 @@ idf_component_register(SRCS "${srcs}"
                        INCLUDE_DIRS "${include_dirs}"
                        REQUIRES spi_flash mdns
                        PRIV_REQUIRES indicator nvs_flash wpa_supplicant spiffs)
+
+target_compile_options(${COMPONENT_LIB} PUBLIC -std=gnu++17)
 
 if(DEBUG_BUILD)
     target_compile_definitions(${COMPONENT_LIB} PUBLIC "DEBUG")
