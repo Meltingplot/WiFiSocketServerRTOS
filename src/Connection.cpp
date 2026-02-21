@@ -166,6 +166,8 @@ void Connection::Poll()
 		{
 			if (rc == ERR_RST || rc == ERR_CLSD || rc == ERR_CONN)
 			{
+				debugPrintf("conn %u: recv err=%d, %s\n",
+					number, (int)rc, readBuf ? "pendOEC" : "otherEndClosed");
 				// Pend setting the state to other end closed if there is data to be read.
 				// Otherwise, set it immediately. This is to avoid a case when a socket in RRF
 				// gets stuck in the peer disconnecting state, when it recieves the change of
@@ -197,11 +199,15 @@ void Connection::Poll()
 		// We're about to close this connection and we're still waiting for the remaining data to be acknowledged
 		if (conn->pcb.tcp && !conn->pcb.tcp->unacked)
 		{
+			debugPrintf("conn %u: closePending done, drained after %ums\n",
+				number, (unsigned)(millis() - closeTimer));
 			// All data has been received, close this connection next time
 			SetState(ConnState::closeReady);
 		}
 		else if (millis() - closeTimer >= MaxAckTime)
 		{
+			debugPrintf("conn %u: closePending done, timeout after %ums\n",
+				number, (unsigned)(millis() - closeTimer));
 			// The acknowledgement timer has expired, abort this connection
 			Terminate(false);
 		}
@@ -220,6 +226,11 @@ void Connection::Close()
 	case ConnState::connected:						// both ends are still connected
 		if (conn->pcb.tcp && conn->pcb.tcp->unacked)
 		{
+			debugPrintf("conn %u: Close() -> closePending unsent=%d unacked=%d qlen=%u\n",
+				number,
+				(conn->pcb.tcp->unsent != nullptr),
+				(conn->pcb.tcp->unacked != nullptr),
+				(unsigned)conn->pcb.tcp->snd_queuelen);
 			closeTimer = millis();
 			netconn_shutdown(conn, true, false);	// shut down recieve
 			SetState(ConnState::closePending);		// wait for the remaining data to be sent before closing
@@ -229,6 +240,7 @@ void Connection::Close()
 	case ConnState::otherEndClosed:					// the other end has already closed the connection
 	case ConnState::closeReady:						// the other end has closed and we were already closePending
 	default:										// should not happen
+		debugPrintf("conn %u: Close() from state=%d -> free\n", number, (int)state);
 		if (conn)
 		{
 			netconn_close(conn);
@@ -294,6 +306,8 @@ bool Connection::Connect(uint8_t protocol, uint32_t remoteIp, uint16_t remotePor
 
 void Connection::Terminate(bool external)
 {
+	debugPrintf("conn %u: Terminate(%s) state=%d\n",
+		number, external ? "ext" : "int", (int)state);
 	if (conn) {
 		// No need to pass to ConnectionTask and do a graceful close on the connection.
 		// Delete it here.
@@ -361,7 +375,8 @@ void Connection::Report()
 
 		"aborted",				// an error has occurred
 		"closePending",			// close this socket when sending is complete
-		"closeReady"			// about to be closed
+		"closeReady",			// about to be closed
+		"allocated"				// allocated but not yet connected
 	};
 
 	const unsigned int st = (int)state;
