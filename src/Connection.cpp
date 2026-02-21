@@ -256,13 +256,12 @@ void Connection::Close()
 				number, hasUnsent, hasUnacked,
 				(conn && conn->pcb.tcp) ? (unsigned)conn->pcb.tcp->snd_queuelen : 0);
 		}
-		// Graduated priority: keep at TCP_PRIO_NORMAL while unsent data remains
-		// so tcp_kill_prio (called with prio 64 for new connections) won't kill
-		// this PCB until the response data is actually on the wire.
-		// Poll() will lower priority further as the drain progresses.
+		// Keep TCP_PRIO_MAX while unsent data remains so the PCB is truly
+		// immune to all lwIP kill paths until the response is on the wire.
+		// Poll() will lower priority once unsent drains (only ACKs pending).
 		if (conn && conn->pcb.tcp)
 		{
-			tcp_setprio(conn->pcb.tcp, TCP_PRIO_NORMAL);
+			tcp_setprio(conn->pcb.tcp, TCP_PRIO_MAX);
 		}
 		SetState(ConnState::closePending);
 		break;
