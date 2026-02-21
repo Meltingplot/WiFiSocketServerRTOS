@@ -244,12 +244,12 @@ void Listener::Notify()
 					}
 					else
 					{
-						debugPrintfAlways("pend connection on port %u no free conn\n", listener->port);
+						debugPrintfAlways("rejected connection on port %u no free conn\n", listener->port);
 					}
 				}
 				else
 				{
-					debugPrintfAlways("pend connection on port %u already %u conns\n", listener->port, numConns);
+					debugPrintfAlways("rejected connection on port %u already %u conns\n", listener->port, numConns);
 				}
 			}
 		}
