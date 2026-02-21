@@ -225,6 +225,14 @@ void Connection::Poll()
 				listener->Notify();
 			}
 		}
+		else if (conn && conn->pcb.tcp && !conn->pcb.tcp->unsent)
+		{
+			// Graduated priority: unsent is empty (data on wire), only ACKs pending.
+			// Lower priority so tcp_kill_prio can reclaim this PCB if the pool
+			// is exhausted, but keep it above TCP_PRIO_MIN to prefer killing
+			// fully-drained or timed-out connections first.
+			tcp_setprio(conn->pcb.tcp, TCP_PRIO_NORMAL / 2);
+		}
 	}
 	else { }
 }
@@ -248,11 +256,13 @@ void Connection::Close()
 				number, hasUnsent, hasUnacked,
 				(conn && conn->pcb.tcp) ? (unsigned)conn->pcb.tcp->snd_queuelen : 0);
 		}
-		// Lower priority so lwIP reclaims closePending PCBs first,
-		// protecting active connections (e.g. uploads) from tcp_kill_prio().
+		// Graduated priority: keep at TCP_PRIO_NORMAL while unsent data remains
+		// so tcp_kill_prio (called with prio 64 for new connections) won't kill
+		// this PCB until the response data is actually on the wire.
+		// Poll() will lower priority further as the drain progresses.
 		if (conn && conn->pcb.tcp)
 		{
-			tcp_setprio(conn->pcb.tcp, TCP_PRIO_MIN);
+			tcp_setprio(conn->pcb.tcp, TCP_PRIO_NORMAL);
 		}
 		SetState(ConnState::closePending);
 		break;
