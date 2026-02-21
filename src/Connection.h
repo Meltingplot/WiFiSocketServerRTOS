@@ -24,6 +24,7 @@
 
 constexpr uint32_t MaxReadWriteTime = 2000;		// how long we wait for a write operation to complete before it is cancelled
 constexpr uint32_t MaxSendWaitTime = 2000;		// how long we wait for unsent data to drain before aborting
+constexpr uint16_t MinFreeSlots = 2;			// minimum free connection slots to keep reserved before accepting new connections
 
 class Connection
 {
@@ -55,6 +56,7 @@ public:
 	static Connection& Get(uint8_t num) { return *connectionList[num]; }
 	static void GetSummarySocketStatus(uint16_t& connectedSockets, uint16_t& otherEndClosedSockets);
 	static void ReportConnections();
+	static uint16_t CountFreeSlots();
 
 protected:
 	void Accept(Listener *listener, struct netconn *conn, uint8_t protocol);

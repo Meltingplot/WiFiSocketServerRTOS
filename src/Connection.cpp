@@ -523,6 +523,19 @@ void Connection::Report()
 	return false;
 }
 
+/*static*/ uint16_t Connection::CountFreeSlots()
+{
+	uint16_t count = 0;
+	for (size_t i = 0; i < MaxConnections; ++i)
+	{
+		if (connectionList[i]->state == ConnState::free)
+		{
+			++count;
+		}
+	}
+	return count;
+}
+
 /*static*/ uint16_t Connection::CountConnectionsOnPort(uint16_t port)
 {
 	uint16_t count = 0;

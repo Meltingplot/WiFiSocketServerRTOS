@@ -219,7 +219,8 @@ void Listener::Notify()
 			if (listener && (flags & (0b1 << i)))
 			{
 				const uint16_t numConns = Connection::CountConnectionsOnPort(listener->port);
-				if (numConns < listener->maxConnections)
+				const uint16_t freeSlots = Connection::CountFreeSlots();
+				if (numConns < listener->maxConnections && freeSlots >= MinFreeSlots)
 				{
 					Connection * const c = Connection::Allocate();
 					if (c != nullptr)
@@ -258,14 +259,22 @@ void Listener::Notify()
 				}
 				else
 				{
-					// Too many connections on this port. Drain from backlog to free lwIP resources.
+					// Too many connections on this port or not enough free slots.
+					// Drain from backlog to free lwIP resources.
 					struct netconn *newConn;
 					if (netconn_accept(listener->conn, &newConn) == ERR_OK)
 					{
 						netconn_close(newConn);
 						netconn_delete(newConn);
 					}
-					debugPrintfAlways("rejected connection on port %u already %u conns\n", listener->port, numConns);
+					if (freeSlots < MinFreeSlots)
+					{
+						debugPrintfAlways("rejected connection on port %u busy (%u free slots)\n", listener->port, freeSlots);
+					}
+					else
+					{
+						debugPrintfAlways("rejected connection on port %u already %u conns\n", listener->port, numConns);
+					}
 				}
 			}
 		}
