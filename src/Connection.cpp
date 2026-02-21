@@ -97,7 +97,7 @@ size_t Connection::Write(const uint8_t *data, size_t length, bool doPush, bool c
 	// Try to send all the data
 	const bool push = doPush || closeAfterSending;
 
-	u8_t flag = NETCONN_COPY | (push ? NETCONN_MORE : 0);
+	u8_t flag = NETCONN_COPY | (push ? 0 : NETCONN_MORE);
 
 	size_t total = 0;
 	size_t written = 0;
@@ -140,7 +140,7 @@ size_t Connection::CanWrite() const
 {
 	// Return the amount of free space in the write buffer
 	// Note: we cannot necessarily write this amount, because it depends on memory allocations being successful.
-	return ((state == ConnState::connected && !pendOtherEndClosed) && conn->pcb.tcp) ?
+	return ((state == ConnState::connected && !pendOtherEndClosed) && conn && conn->pcb.tcp) ?
 		std::min((size_t)tcp_sndbuf(conn->pcb.tcp), MaxDataLength) : 0;
 }
 
@@ -166,6 +166,8 @@ void Connection::Poll()
 		{
 			if (rc == ERR_RST || rc == ERR_CLSD || rc == ERR_CONN)
 			{
+				debugPrintf("conn %u: recv err=%d, %s\n",
+					number, (int)rc, readBuf ? "pendOEC" : "otherEndClosed");
 				// Pend setting the state to other end closed if there is data to be read.
 				// Otherwise, set it immediately. This is to avoid a case when a socket in RRF
 				// gets stuck in the peer disconnecting state, when it recieves the change of
@@ -183,6 +185,7 @@ void Connection::Poll()
 			}
 			else
 			{
+				debugPrintf("conn %u: recv err=%d -> Terminate\n", number, (int)rc);
 				Terminate(false);
 			}
 		}
@@ -194,15 +197,22 @@ void Connection::Poll()
 	}
 	else if (state == ConnState::closePending)
 	{
-		// We're about to close this connection and we're still waiting for the remaining data to be acknowledged
-		if (conn->pcb.tcp && !conn->pcb.tcp->unacked)
+		// We're about to close this connection and we're still waiting for the remaining data to be sent/acknowledged
+		const uint32_t elapsed = millis() - closeTimer;
+		if (conn && conn->pcb.tcp && !conn->pcb.tcp->unsent && !conn->pcb.tcp->unacked)
 		{
-			// All data has been received, close this connection next time
+			// All data has been sent and acknowledged, close this connection next time
+			debugPrintf("conn %u: closePending done, drained after %ums\n",
+				number, (unsigned)elapsed);
 			SetState(ConnState::closeReady);
 		}
-		else if (millis() - closeTimer >= MaxAckTime)
+		else if (!conn || !conn->pcb.tcp || elapsed >= MaxAckTime)
 		{
-			// The acknowledgement timer has expired, abort this connection
+			// The acknowledgement timer has expired or PCB lost, abort this connection
+			debugPrintf("conn %u: closePending done, %s after %ums\n",
+				number,
+				!conn ? "no conn" : !conn->pcb.tcp ? "no pcb" : "timeout",
+				(unsigned)elapsed);
 			Terminate(false);
 		}
 	}
@@ -218,26 +228,41 @@ void Connection::Close()
 	switch(state)
 	{
 	case ConnState::connected:						// both ends are still connected
-		if (conn->pcb.tcp && conn->pcb.tcp->unacked)
+		if (conn && conn->pcb.tcp && (conn->pcb.tcp->unsent || conn->pcb.tcp->unacked))
 		{
 			closeTimer = millis();
-			netconn_shutdown(conn, true, false);	// shut down recieve
+			{
+				const bool hasUnsent = conn->pcb.tcp->unsent != nullptr;
+				const bool hasUnacked = conn->pcb.tcp->unacked != nullptr;
+				debugPrintf("conn %u: Close() -> closePending unsent=%d unacked=%d qlen=%u\n",
+					number, hasUnsent, hasUnacked, (unsigned)conn->pcb.tcp->snd_queuelen);
+			}
+			// Lower priority so lwIP reclaims closePending PCBs first,
+			// protecting active connections (e.g. uploads) from tcp_kill_prio().
+			tcp_setprio(conn->pcb.tcp, TCP_PRIO_MIN);
+			netconn_shutdown(conn, true, false);	// shut down receive
 			SetState(ConnState::closePending);		// wait for the remaining data to be sent before closing
 			break;
 		}
+		debugPrintf("conn %u: Close() connected, no pending data -> free\n", number);
 		// fallthrough
 	case ConnState::otherEndClosed:					// the other end has already closed the connection
 	case ConnState::closeReady:						// the other end has closed and we were already closePending
 	default:										// should not happen
+		debugPrintf("conn %u: Close() from state=%d -> free\n", number, (int)state);
 		if (conn)
 		{
+			netconn_set_sendtimeout(conn, 1);		// other end may be gone, don't block
 			netconn_close(conn);
 			netconn_delete(conn);
 			conn = nullptr;
 		}
 		FreePbuf();
 		SetState(ConnState::free);
-		listener->Notify();
+		if (listener)
+		{
+			listener->Notify();
+		}
 		break;
 
 	case ConnState::closePending:					// we already asked to close
@@ -289,11 +314,13 @@ bool Connection::Connect(uint8_t protocol, uint32_t remoteIp, uint16_t remotePor
 		debugPrintAlways("can't allocate connection\n");
 	}
 
-	return true;
+	return false;
 }
 
 void Connection::Terminate(bool external)
 {
+	debugPrintf("conn %u: Terminate(%s) state=%d\n",
+		number, external ? "ext" : "int", (int)state);
 	if (conn) {
 		// No need to pass to ConnectionTask and do a graceful close on the connection.
 		// Delete it here.
@@ -303,7 +330,10 @@ void Connection::Terminate(bool external)
 	}
 	FreePbuf();
 	SetState((external) ? ConnState::free : ConnState::aborted);
-	listener->Notify();
+	if (external && listener)
+	{
+		listener->Notify();
+	}
 }
 
 void Connection::Accept(Listener *listener, struct netconn* conn, uint8_t protocol)
@@ -361,7 +391,8 @@ void Connection::Report()
 
 		"aborted",				// an error has occurred
 		"closePending",			// close this socket when sending is complete
-		"closeReady"			// about to be closed
+		"closeReady",			// about to be closed
+		"allocated"				// allocated but not yet connected
 	};
 
 	const unsigned int st = (int)state;
@@ -440,7 +471,8 @@ void Connection::Report()
 	// specifically after the state == free check, at which point is
 	// pre-empted by the ConnectionTask executing the same code, the allocated
 	// Connection will have been already spent.
-	xSemaphoreTake(allocateMutex, portMAX_DELAY);
+	if (!allocateMutex) { return nullptr; }
+	if (xSemaphoreTake(allocateMutex, pdMS_TO_TICKS(200)) != pdTRUE) { return nullptr; }
 	for (size_t i = 0; i < MaxConnections; ++i)
 	{
 		if (connectionList[i]->state == ConnState::free)
