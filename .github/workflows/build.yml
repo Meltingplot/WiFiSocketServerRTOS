@@ -5,6 +5,12 @@ on:
     branches: [ master, main ]
   pull_request:
     branches: [ master, main ]
+  workflow_dispatch:
+    inputs:
+      ref:
+        description: 'Branch, tag, or commit SHA to build (leave empty to use the branch selected above)'
+        required: false
+        default: ''
 
 jobs:
   build-esp8266:
@@ -53,6 +59,8 @@ jobs:
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.inputs.ref || github.ref }}
 
       - name: Install prerequisites
         run: |
