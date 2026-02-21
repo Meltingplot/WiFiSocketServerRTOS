@@ -1,4 +1,4 @@
-name: Build ESP8266
+name: Build
 
 on:
   push:
@@ -93,4 +93,80 @@ jobs:
         with:
           name: DuetWiFiServer-debug
           path: build/DuetWiFiServer.bin
+          if-no-files-found: warn
+
+  build-esp32s3:
+    runs-on: ubuntu-22.04
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Install prerequisites
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y gcc git wget make libncurses-dev flex bison gperf python3 python3-pip python3-venv python-is-python3 cmake ninja-build ccache libffi-dev libssl-dev dfu-util libusb-1.0-0
+
+      - name: Clone ESP-IDF
+        run: |
+          git clone --branch dwss_support --recursive https://github.com/Duet3D/esp-idf.git ${{ github.workspace }}/esp-idf
+
+      - name: Install ESP-IDF toolchain
+        run: |
+          cd ${{ github.workspace }}/esp-idf
+          ./install.sh esp32s3
+          for pip_bin in $HOME/.espressif/python_env/*/bin/pip; do
+            $pip_bin install "setuptools<75"
+          done
+
+      - name: Build
+        run: |
+          source ${{ github.workspace }}/esp-idf/export.sh
+          cd ${{ github.workspace }}
+          idf.py set-target esp32s3 build
+
+      - name: Upload build artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: DuetWiFiModule_32S3
+          path: build/DuetWiFiModule_32S3.bin
+          if-no-files-found: warn
+
+  build-esp32s3-debug:
+    runs-on: ubuntu-22.04
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.inputs.ref || github.ref }}
+
+      - name: Install prerequisites
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y gcc git wget make libncurses-dev flex bison gperf python3 python3-pip python3-venv python-is-python3 cmake ninja-build ccache libffi-dev libssl-dev dfu-util libusb-1.0-0
+
+      - name: Clone ESP-IDF
+        run: |
+          git clone --branch dwss_support --recursive https://github.com/Duet3D/esp-idf.git ${{ github.workspace }}/esp-idf
+
+      - name: Install ESP-IDF toolchain
+        run: |
+          cd ${{ github.workspace }}/esp-idf
+          ./install.sh esp32s3
+          for pip_bin in $HOME/.espressif/python_env/*/bin/pip; do
+            $pip_bin install "setuptools<75"
+          done
+
+      - name: Build (DEBUG)
+        run: |
+          source ${{ github.workspace }}/esp-idf/export.sh
+          cd ${{ github.workspace }}
+          idf.py -DDEBUG_BUILD=1 set-target esp32s3 build
+
+      - name: Upload debug build artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: DuetWiFiModule_32S3-debug
+          path: build/DuetWiFiModule_32S3.bin
           if-no-files-found: warn
