@@ -88,7 +88,11 @@ const uint8_t Backlog = 8;
 #define DNS_SERVER_PRIO							(ESP_TASK_MAIN_PRIO)
 
 #ifdef DEBUG
+#ifdef ESP8266
 #define STATE_PRINT_STACK						(1024)
+#else
+#define STATE_PRINT_STACK						(2048)
+#endif
 #endif
 
 #ifdef ESP8266
