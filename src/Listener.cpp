@@ -232,6 +232,7 @@ void Listener::Notify()
 							netconn_set_recvtimeout(newConn, MaxReadWriteTime);
 							netconn_set_sendtimeout(newConn, MaxReadWriteTime);
 							c->Accept(listener, newConn, listener->protocol);
+							xTaskNotify(listenTaskHandle, 0b1 << i, eSetBits);	// re-notify to drain backlog
 							if (listener->protocol == protocolFtpData)
 							{
 								debugPrintf("accept conn, stop listen on port %u\n", listener->port);
