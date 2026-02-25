@@ -197,8 +197,10 @@ void Connection::Poll()
 	}
 	else if (state == ConnState::closePending)
 	{
-		// We're about to close this connection and we're still waiting for the remaining data to be acknowledged
-		if (conn->pcb.tcp && !conn->pcb.tcp->unacked)
+		// we lost the connection (!conn)
+		// or the other end has closed the connection e.g. with RST (!conn->pcb.tcp)
+		// or we're about to close this connection and we're still waiting for the remaining data to be acknowledged
+		if (!conn || !conn->pcb.tcp || !conn->pcb.tcp->unacked)
 		{
 			// All data has been received, close this connection next time
 			SetState(ConnState::closeReady);
@@ -225,8 +227,16 @@ void Connection::Close()
 		{
 			closeTimer = millis();
 			netconn_shutdown(conn, true, false);	// shut down recieve
-			SetState(ConnState::closePending);		// wait for the remaining data to be sent before closing
-			break;
+			// Check if the PCB survived the shutdown. If the remote end already
+			// closed/reset the connection, lwIP may free the PCB during shutdown.
+			// Only enter closePending if there's genuinely
+			// still data waiting to be acknowledged.
+			if (conn->pcb.tcp && conn->pcb.tcp->unacked)
+			{
+				SetState(ConnState::closePending);	// wait for the remaining data to be sent before closing
+				break;
+			}
+			// PCB was freed during shutdown, fall through to immediate close
 		}
 		// fallthrough
 	case ConnState::otherEndClosed:					// the other end has already closed the connection
