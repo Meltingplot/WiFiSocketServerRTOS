@@ -200,15 +200,31 @@ void Connection::Poll()
 		// we lost the connection (!conn)
 		// or the other end has closed the connection e.g. with RST (!conn->pcb.tcp)
 		// or we're about to close this connection and we're still waiting for the remaining data to be acknowledged
-		if (!conn || !conn->pcb.tcp || !conn->pcb.tcp->unacked)
+		if (!conn || !conn->pcb.tcp || (!conn->pcb.tcp->unsent && !conn->pcb.tcp->unacked))
 		{
-			// All data has been received, close this connection next time
+			// All data has been sent and acknowledged, close this connection immediately
 			SetState(ConnState::closeReady);
+			// lower priority - it's safe to call with null PCB
+			if (conn)
+			{
+				tcp_setprio(conn->pcb.tcp, TCP_PRIO_MIN);
+			}
 		}
 		else if (millis() - closeTimer >= MaxAckTime)
 		{
 			// The acknowledgement timer has expired, abort this connection
 			Terminate(false);
+		}
+		else if (!conn->pcb.tcp->unsent)
+		{
+			// All data has been sent, but not yet acknowledged. Set the TCP priority to normal
+			// to signal LwIP that this connection is less important than other connected connections,
+			// so it is more likely to be dropped if the system is under heavy load and we are not
+			// getting acknowledgements back from the remote end. This is to try to mitigate the case
+			// when the remote end has disappeared but we are still waiting for acknowledgements that
+			// will never come back, and meanwhile we are not able to close this connection and free
+			// up resources for new connections.
+			tcp_setprio(conn->pcb.tcp, TCP_PRIO_NORMAL);
 		}
 	}
 	else { }
@@ -339,6 +355,9 @@ void Connection::Connected(Listener *listener, struct netconn* conn)
 	remotePort = conn->pcb.tcp->remote_port;
 	remoteIp = conn->pcb.tcp->remote_ip.u_addr.ip4.addr;
 	readIndex = alreadyRead = closeTimer = pendOtherEndClosed = 0;
+
+	// Set the TCP priority to maximum to try to protect it from being dropped when the system is under heavy load.
+	tcp_setprio(conn->pcb.tcp, TCP_PRIO_MAX);
 
 	// This function is used in lower priority tasks than the main task.
 	// Mark the connection ready last, so the main task does not use it when it's not ready.
