@@ -206,6 +206,30 @@ void Listener::Notify()
 	}
 }
 
+void Listener::CheckPortCapacity()
+{
+	for (int i = 0; i < MaxConnections; i++)
+	{
+		if (this != listeners[i])
+		{
+			// determine our index in the listeners array for the notification bitmask
+			continue;
+		}
+
+		if (wasAtMax)
+		{
+			const uint16_t numConns = Connection::CountConnectionsOnPort(port);
+			const bool atMax = (numConns >= maxConnections);
+			if (!atMax)
+			{
+				debugPrintf("port %u below max capacity %u\n", port, numConns);
+				wasAtMax = false;
+				xTaskNotify(listenTaskHandle, 0b1 << i, eSetBits);
+			}
+		}
+	}
+}
+
 /*static*/ void Listener::ListenerTask(void* p)
 {
 	uint32_t flags = 0;
@@ -232,7 +256,6 @@ void Listener::Notify()
 							netconn_set_recvtimeout(newConn, MaxReadWriteTime);
 							netconn_set_sendtimeout(newConn, MaxReadWriteTime);
 							c->Accept(listener, newConn, listener->protocol);
-							xTaskNotify(listenTaskHandle, 0b1 << i, eSetBits);	// re-notify to drain backlog
 							if (listener->protocol == protocolFtpData)
 							{
 								debugPrintf("accept conn, stop listen on port %u\n", listener->port);
@@ -253,6 +276,12 @@ void Listener::Notify()
 				else
 				{
 					debugPrintfAlways("pend connection on port %u already %u conns\n", listener->port, numConns);
+
+					if (!listener->wasAtMax)
+					{
+						debugPrintf("port %u at max capacity %u\n", listener->port, numConns);
+						listener->wasAtMax = true;
+					}
 				}
 			}
 		}

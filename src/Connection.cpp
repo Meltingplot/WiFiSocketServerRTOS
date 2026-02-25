@@ -427,7 +427,12 @@ void Connection::Report()
 {
 	for (size_t i = 0; i < MaxConnections; ++i)
 	{
-		Connection::Get(i).Poll();
+		Connection& conn = Connection::Get(i);
+		conn.Poll();
+		if (conn.listener)
+		{
+			conn.listener->CheckPortCapacity();
+		}
 	}
 }
 
