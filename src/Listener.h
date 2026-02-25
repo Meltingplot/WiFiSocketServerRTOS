@@ -18,6 +18,7 @@ class Listener
 {
 public:
 	void Notify();
+	void CheckPortCapacity();
 
 	static void Init();
 	static bool Start(uint16_t port, uint32_t ip, int protocol, int maxConns);
@@ -33,6 +34,7 @@ private:
 	uint16_t port;
 	uint16_t maxConnections;
 	uint8_t protocol;
+	bool wasAtMax = false;
 
 	void Stop();
 
