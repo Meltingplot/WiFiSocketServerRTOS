@@ -55,6 +55,9 @@ public:
 	static Connection& Get(uint8_t num) { return *connectionList[num]; }
 	static void GetSummarySocketStatus(uint16_t& connectedSockets, uint16_t& otherEndClosedSockets);
 	static void ReportConnections();
+#ifdef DEBUG
+	static uint32_t terminateInternalCount;
+#endif
 
 protected:
 	void Accept(Listener *listener, struct netconn *conn, uint8_t protocol);

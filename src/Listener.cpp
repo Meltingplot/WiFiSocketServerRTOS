@@ -208,7 +208,7 @@ void Listener::Notify()
 
 void Listener::CheckPortCapacity()
 {
-	for (int i = 0; i < MaxConnections; i++)
+	for (size_t i = 0; i < MaxConnections; i++)
 	{
 		if (this != listeners[i])
 		{

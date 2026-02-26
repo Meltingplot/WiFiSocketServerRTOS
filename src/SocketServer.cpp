@@ -208,7 +208,7 @@ static void StatePrintTask(void* data)
 
 		uint16_t connected, otherEndClosed;
 		Connection::GetSummarySocketStatus(connected, otherEndClosed);
-		printf("connected_sockets: 0x%x other_end_closed_sockets: 0x%x\n", connected, otherEndClosed);
+		printf("connected_sockets: 0x%x other_end_closed_sockets: 0x%x terminate_internal: %u\n", connected, otherEndClosed, Connection::terminateInternalCount);
 		Connection::ReportConnections();
 		printf("------------------------------------------------------\n");
 		vTaskDelay(pdMS_TO_TICKS(250));

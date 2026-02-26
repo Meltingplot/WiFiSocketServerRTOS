@@ -335,6 +335,9 @@ void Connection::Terminate(bool external)
 	}
 	FreePbuf();
 	SetState((external) ? ConnState::free : ConnState::aborted);
+#ifdef DEBUG
+	if (!external) { ++terminateInternalCount; }
+#endif
 	if (external && listener)
 	{
 		listener->Notify();
@@ -540,6 +543,9 @@ void Connection::Report()
 }
 
 // Static data
+#ifdef DEBUG
+uint32_t Connection::terminateInternalCount = 0;
+#endif
 SemaphoreHandle_t Connection::allocateMutex = nullptr;
 Connection *Connection::connectionList[MaxConnections];
 
