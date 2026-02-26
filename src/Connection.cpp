@@ -462,11 +462,12 @@ void Connection::Report()
 	otherEndClosedSockets = 0;
 	for (size_t i = 0; i < MaxConnections; ++i)
 	{
-		if (Connection::Get(i).GetState() == ConnState::connected)
+		const ConnState state = Connection::Get(i).GetState();
+		if ( state == ConnState::connected)
 		{
 			connectedSockets |= (1 << i);
 		}
-		else if (Connection::Get(i).GetState() == ConnState::otherEndClosed)
+		else if (state == ConnState::otherEndClosed || state == ConnState::aborted)
 		{
 			otherEndClosedSockets |= (1 << i);
 		}
