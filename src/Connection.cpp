@@ -200,7 +200,8 @@ void Connection::Poll()
 		// we lost the connection (!conn)
 		// or the other end has closed the connection e.g. with RST (!conn->pcb.tcp)
 		// or we're about to close this connection and we're still waiting for the remaining data to be acknowledged
-		if (!conn || !conn->pcb.tcp || (!conn->pcb.tcp->unsent && !conn->pcb.tcp->unacked))
+		// or the acknowledgement timer has expired, abort this connection
+		if (!conn || !conn->pcb.tcp || (!conn->pcb.tcp->unsent && !conn->pcb.tcp->unacked) || (millis() - closeTimer >= MaxAckTime))
 		{
 			// All data has been sent and acknowledged, close this connection immediately
 			SetState(ConnState::closeReady);
@@ -209,11 +210,6 @@ void Connection::Poll()
 			{
 				tcp_setprio(conn->pcb.tcp, TCP_PRIO_MIN);
 			}
-		}
-		else if (millis() - closeTimer >= MaxAckTime)
-		{
-			// The acknowledgement timer has expired, abort this connection
-			Terminate(false);
 		}
 		else if (!conn->pcb.tcp->unsent)
 		{
