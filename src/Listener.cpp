@@ -227,6 +227,7 @@ void Listener::CheckPortCapacity()
 				xTaskNotify(listenTaskHandle, 0b1 << i, eSetBits);
 			}
 		}
+		break;
 	}
 }
 
