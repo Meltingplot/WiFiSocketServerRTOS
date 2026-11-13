@@ -284,7 +284,7 @@ bool WirelessConfigurationMgr::BeginEnterpriseSsid(const WirelessConfigurationDa
 
 bool WirelessConfigurationMgr::SetEnterpriseCredential(int cred, const void* buff, size_t size)
 {
-	if (pendingSsid)
+	if (pendingSsid && cred >= 0 && cred < ARRAY_SIZE(pendingSsid->sizes.asArr))
 	{
 		size_t newSize = pendingSsid->sizes.asArr[cred] + size;
 

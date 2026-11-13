@@ -1357,11 +1357,11 @@ void ProcessRequest()
 					uint8_t EspWiFiPhyMode = 0;
 					esp_wifi_get_protocol(runningAsStation ? WIFI_IF_STA : WIFI_IF_AP, &EspWiFiPhyMode);
 
-					if (EspWiFiPhyMode | WIFI_PROTOCOL_11N) {
+					if (EspWiFiPhyMode & WIFI_PROTOCOL_11N) {
 						response->phyMode = static_cast<int>(EspWiFiPhyMode::N);
-					} else if (EspWiFiPhyMode | WIFI_PROTOCOL_11G) {
+					} else if (EspWiFiPhyMode & WIFI_PROTOCOL_11G) {
 						response->phyMode = static_cast<int>(EspWiFiPhyMode::G);
-					} else if (EspWiFiPhyMode | WIFI_PROTOCOL_11B) {
+					} else if (EspWiFiPhyMode & WIFI_PROTOCOL_11B) {
 						response->phyMode = static_cast<int>(EspWiFiPhyMode::B);
 					}
 
@@ -1620,7 +1620,7 @@ void ProcessRequest()
 				if (wifiScanNum > 0) {
 					// By default the records are sorted by signal strength, so just
 					// send all ap records that fit the transfer buffer.
-					for (int i = 0; i < wifiScanNum && data_sz <= sizeof(transferBuffer); i++, data_sz += sizeof(WiFiScanData))
+					for (int i = 0; i < wifiScanNum && data_sz + sizeof(WiFiScanData) <= sizeof(transferBuffer); i++, data_sz += sizeof(WiFiScanData))
 					{
 						const wifi_ap_record_t& ap = wifiScanAPs[i];
 						WiFiScanData &d = reinterpret_cast<WiFiScanData*>(transferBuffer)[i];
