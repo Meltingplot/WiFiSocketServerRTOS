@@ -21,9 +21,21 @@ static_assert(MaxConnections < sizeof(uint32_t) * 8); // Limits the listen callb
 constexpr TickType_t HandshakeStepInterval = 1;
 #endif
 
+// Protects the listeners table, so that a listener cannot be deleted while the listener task is accepting a connection on it
+static SemaphoreHandle_t listenersMutex = nullptr;
+
+class ListenersLock
+{
+public:
+	ListenersLock() { xSemaphoreTake(listenersMutex, portMAX_DELAY); }
+	~ListenersLock() { xSemaphoreGive(listenersMutex); }
+};
+
 
 bool Listener::Start(uint16_t port, uint32_t ip, int protocol, int maxConns, bool tls)
 {
+	ListenersLock lock;
+
 	// See if we are already listing for this
 	for (Listener *listener : listeners)
 	{
@@ -131,21 +143,21 @@ bool Listener::Start(uint16_t port, uint32_t ip, int protocol, int maxConns, boo
 	return false;
 }
 
+// Stop listening and delete this listener. The caller must hold the listeners lock
 void Listener::Stop()
 {
-	struct netconn *savedConn = conn;
-	netconn_close(savedConn);
-	netconn_delete(savedConn);
-
+	// Remove this listener from the table first, so that no further connection is accepted on it while it shuts down
 	for (int i = 0; i < MaxConnections; i++)
 	{
-		Listener *listener = listeners[i];
-		if (listener && listener->conn == savedConn)
+		if (listeners[i] == this)
 		{
-			delete listener;
 			listeners[i] = nullptr;
 		}
 	}
+
+	netconn_close(conn);
+	netconn_delete(conn);
+	delete this;
 }
 
 /*static*/ void Listener::Init()
@@ -154,12 +166,14 @@ void Listener::Stop()
 	{
 		listeners[i] = nullptr;
 	}
+	listenersMutex = xSemaphoreCreateMutex();
 	xTaskCreatePinnedToCore(ListenerTask, "tcpListener", TCP_LISTENER_STACK, NULL,
 		TCP_LISTENER_PRIO, &listenTaskHandle, NET_TASK_CPU);
 }
 
 /*static*/ void Listener::Stop(uint16_t port)
 {
+	ListenersLock lock;
 	for (Listener *listener : listeners)
 	{
 		if (listener && (port == 0 || port == listener->port))
@@ -232,6 +246,7 @@ void Listener::Notify()
 
 		for (int i = 0; i < MaxConnections; i++)
 		{
+			ListenersLock lock;
 			Listener *listener = listeners[i];
 
 			if (listener && (flags & (0b1 << i)))
